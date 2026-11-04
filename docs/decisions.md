@@ -1,0 +1,233 @@
+# Decisions
+
+Key decisions behind the current design. Each entry states what is decided, why, and the cost where there is one. Only current decisions are recorded: when a decision changes, its entry is rewritten or removed. Entries settled from 2026-11-04 on carry their date.
+
+## Principles
+
+**Reads go anywhere, writes have one path.**
+Every state change goes through `decide` and an operation. `_set_memory` is the only writer of `AgentMemory`; `transition_to` is the only writer of `ProcessMemory`.
+Why: every change is traceable to one decision and one operation.
+
+**Derive labels, store facts.**
+Values computable from what's observable now are derived, never stored (`ProcessStatus.CRASHED`, `AgentStatus`, "updating"). Things that happened are persisted (counters, `failed_generation`, `crash_restarted`).
+Why: stored labels go stale and can't be left stuck by a crash; past facts can't be recomputed.
+
+**One snapshot per tick.**
+`Observed` is built once per tick (including `healthy`, read once) and both the report and `decide` use it.
+Why: the report always describes exactly what the decision was based on.
+
+**The managers don't know each other.**
+Cross-manager data flows through pipeline context keys; the supervisor is the only component holding both.
+Why: independently testable, one-directional dependencies.
+
+**The heartbeat is the only status channel.**
+The agent serves no routes and the cluster manager never calls an agent. Silence means unreachable.
+Why: one source of truth, no inbound access to agents, no probe state.
+
+**Explicit over clever; names show where they come from.**
+Recipes are written out step by step. Names carry their origin (`MetricsReading`, not `Reading`).
+Cost: more typing.
+
+**Persisted models have no field defaults.**
+First-boot values are built explicitly.
+Why: a missing field in a stored file fails loudly.
+
+## Agent policy
+
+**The agent only acts on a desired state received this tick.** A failed heartbeat means do nothing.
+Why: never acts on a stale desired state.
+
+**One operation at a time, restarted from scratch.** Every step is idempotent; nothing resumes.
+Why: no partial-progress state to persist or reason about.
+
+**The agent never rolls back.** The cluster manager rolls back by changing the desired state.
+Why: rollback is policy, owned by the component that sees the whole cluster.
+
+**`decide` is pure.** It gets values only, no IO, and never reads `healthy` or `violations`.
+Why: policy stays testable. `decide` says what, `operations` how, the supervisor when.
+
+**`generation` identifies one change to one agent's desired state.**
+The agent works through it over as many ticks and operations as needed; only `failed_generation == generation` stops it. Acknowledged means received, not finished.
+
+**Generation counters start at 0 on both sides.** No baselining; the cluster manager resets them on re-provisioning.
+
+**Crash budget: one automatic CRASH_RESTART, then CRASHED_HOLD.**
+Only UPDATE and FORCE_UPDATE reset `crash_restarted`. A force bump is the way out of CRASHED_HOLD. An agent restart ending CRASHED_HOLD for a dead worker is accepted.
+Why: the budget is a convenience, not a safety mechanism, so it stays simple.
+
+**`plan()` runs before the crash budget is spent; a `plan()` error is a bug, not a failed operation.**
+It ends the tick loop and systemd restarts the agent.
+Why: `plan()` does no IO, so an error says nothing about the desired state.
+Cost: a deterministic bug restart-loops until systemd's start limit.
+
+**"Updating" is derived from the operation type** (`UPDATING_OPS`), not a flag.
+Cost: it covers the whole operation, not one phase.
+
+**The last operation isn't persisted.** It's in memory for the report and logged as one JSON journal line; the cluster manager keeps history. Cancelled operations aren't logged.
+
+## Process management
+
+**`ProcessManager` owns every `ProcessStatus` rule.**
+`derive_status(responsive)`: dead pid while STARTING/RUNNING → CRASHED; RUNNING but unresponsive → CRASHED (hung). CRASHED is never stored.
+Why: one place decides the status; a hang is the same derivation as a dead pid.
+Cost: a long stall under load could read as a hang, so `max_failures × interval` must be generous.
+
+**`transition_to` is the only writer of the process file.**
+Allowed: STOPPED → STARTING, STARTING → RUNNING/STOPPING, RUNNING → STOPPING, STOPPING → STOPPED. Same-state is a no-op. Entering STARTING records `pid` and `create_time`; entering STOPPED clears them.
+
+**`reattach` settles a dead pid to STOPPED.** The agent only reports a crash it was alive to see.
+Cost: no crash evidence for a worker that died while the agent was down.
+
+**Every stop is a SIGKILL.** No SIGTERM rung, no `force_kill`.
+Why: the worker is slow to die and a hung one ignores SIGTERM anyway.
+Cost: the worker never shuts down gracefully.
+
+**Spawning:** `posix_spawnp` in its own process group; identity is pid + `create_time` (psutil, 1s tolerance); zombies are reaped; `start` refuses unless STOPPED.
+
+**Starting ends with `wait_for_log`; a timeout kills the process and ends on the crash path.**
+`start` returns the program log's size from before the spawn, and `wait_for_log` reads forward from there. `start` and `wait_for_log` have `retries=0`. No finally steps.
+Why: a start that never gets ready is a failed worker, which the crash path already handles.
+
+**REATTACH waits with `wait_for_version`, not the log.**
+Why: a new agent doesn't know where the current run's log lines begin.
+
+**Health is the version endpoint.** `HealthMonitor` is active while RUNNING or CRASHED and no operation runs. The worker only stops answering during agent-driven operations.
+Cost: a hang verdict is lost after an operation or agent restart.
+
+**The worker survives an agent restart** (`KillMode=process`).
+
+**Two worker logs:** a per-spawn console log in `/tmp` named by UTC start time, and the worker's own program log, which `wait_for_log` reads.
+
+## Recipes
+
+| Op | Steps |
+|---|---|
+| REATTACH | `reattach, wait_for_version (when), stop (when)` |
+| START | `start, wait_for_log` |
+| STOP | `stop` |
+| RESTART | `stop, start, wait_for_log` |
+| CRASH_RESTART | `stop, start, wait_for_log` |
+| UPDATE | `download, clear_hypertree*, fetch_hypertree*, reload, verify (retries=1), upload_hypertree*` |
+| FORCE_UPDATE | `download` |
+
+`*` = non-critical. No recipe has finally steps.
+
+**Only UPDATE verifies the version.**
+Why: the others bring a worker up, they don't choose what it runs. Verifying `desired.version` in a restart would block the UPDATE that fixes it.
+
+**Every step that can hang has its own timeout; the cluster manager has no operation deadlines.**
+Why: the agent owns mechanics and can actually end an operation.
+
+**Binary installation is outside the agent.** A box always has a default artifact; there is no `commit` and no `cleanup`.
+
+**Artifacts are bundles: one unpacked folder per version, linked into `etc_dir` per file.**
+Unpacked into `<version>.part` then renamed; links are swapped atomically. A real file at a link target is refused, never moved or deleted.
+Why: switching versions only ever changes links; the default install is never harmed.
+
+**Hypertrees are best effort.** Cleared before the load, fetched if present, and the one folder left after a successful load is zipped and uploaded.
+Why: a hypertree only speeds loads up, so it must never fail an update.
+
+**Reload is two worker calls in one step** (`reload_phase1`, `reload_phase2`).
+Why: a retry must repeat both.
+
+**Conditional steps use guards.** A skipped step is `ok=true, attempts=0`, which the cluster manager shows as skipped.
+
+## Pipeline engine
+
+- Checks run before any side effect: stage signatures, stage fit, initial context.
+- Finally steps run on success, failure and cancellation, and can't depend on produced keys.
+- `retries` counts retries after the first try; negative is rejected.
+- `failure` is set only inside `run`.
+
+## Monitors and metrics
+
+**Monitors read a `ConditionFeed` and run as explicit tasks.** A monitor crash is logged and can't take down the supervisor.
+
+**`violations` is three-valued and free text:** `None` no verdict, `[]` ok, list = problems. Nothing parses the messages.
+
+**Performance is one failed-request ratio over a 5-minute window** from cumulative counters (`failed / (out + failed) > 0.30`).
+Cost: no verdict for the first 5 minutes after an update.
+
+**A broken metrics source is reported as `metrics_available=False`;** the cluster manager alerts on it.
+
+**`WorkerClient` queries return `None` on failure; commands raise; `metrics()` is all or nothing.**
+
+## Elastic
+
+**Best effort, never raises, no queue, no logs.** Logs go to the journal only.
+**Two indexes, metrics and host;** the client adds `host`, `ipv4`, `location` to every document. TLS uses the CA in `elastic.cert`; a missing cert fails startup.
+
+## Agent app
+
+- FastAPI under uvicorn, passing the app object (rules out multiple workers and reload). Wiring is a lifespan.
+- uvicorn owns signals; shutdown cancels the tick loop. A tick-loop crash SIGTERMs the process.
+- Fixed 10s tick, 20s shutdown grace, `TimeoutStopSec=40`.
+- `_set_memory` saves before updating memory and takes typed changes (`AgentMemoryChanges`).
+- Settings come only from `.env`: no prefix, environment ignored, unknown keys rejected. Everything binds `0.0.0.0`.
+- Host identity (IPv4, hostname, location) comes from config, written by Foreman.
+
+## Wire
+
+- The reply is the bare, flat `DesiredState`. No envelope, no `protocol_version`, no maintenance.
+- One contract; a wire change is deployed to both sides together. Both `wire.py` copies are identical.
+- An agent is its IPv4 address (`IPv4Address` on the wire, strings in the DB). No hostname on the wire.
+- The first heartbeat from an unknown IP registers the agent, seeded from the report. Decommissioned IPs are refused; who may join is an external whitelist.
+- Every timestamp is `AwareDatetime`.
+- `OperationView` is used exactly on both sides and carries `generation`.
+- `running_version` is stored as reported, `null` included.
+- Agents receive complete file-server URLs; they never build them.
+
+## Cluster manager
+
+**A daemon driven by a CLI over HTTP**, sharing a schemas module. Services own transactions; repositories never commit.
+
+**Versions: VERIFYING, ACTIVE, STABLE, UNSTABLE.** At most one VERIFYING, exactly one ACTIVE, enforced in the database. UNSTABLE is never deployed again. A version's id is the worker's version string (upstream's job id).
+
+**Bootstrap:** on an empty table, `config.bootstrap_version` is fetched and seeded as a verified ACTIVE. Afterwards the setting is ignored.
+
+**Dispatch:** the file server fetches the artifact first (and returns its sha256); only then does the canary start. Existing versions and concurrent dispatches are refused.
+Why: agents depend only on infrastructure we own, and no canary starts on an unavailable artifact.
+
+**Canary:** a random fixed-size sample of live, running agents; membership is derived from `desired_state.version`. Judged once at a deadline: each agent gets one outcome, counted against per-bucket limits (crashes, performance, not converged). Passing promotes automatically.
+Cost: until metrics flow, a canary can only fail on crashes, faulty updates or non-convergence.
+
+**At most one rollback in a row.** An ACTIVE that came from a rollback is never rolled back. Rollback is a human request for now. `unstable_reason` records why.
+
+**Non-responding after 3 missed ticks.** Incidents (`non_responding`, `metrics_unavailable`), at most one open per agent and kind. A sender posts openings and recoveries to Mattermost after commit, marking each sent only on success.
+
+**Database:** SQLite, all access through SQLAlchemy, no literal SQL. Enums stored by name. Timestamps are `UtcDateTime` from the daemon's clock. Indexes and constraints are expressions over model attributes. Desired-state changes are one atomic `UPDATE ... RETURNING`; history keyed `(ip, generation)`. Operations recorded once per `(agent_ip, op_id)`. Schema via `create_all`, no migrations while data can be wiped.
+
+**The CLI is Typer, rendered with Rich (2026-11-04).**
+Each command is a typed function whose docstring is its help, enum options list their choices and are checked before a request is sent, and lists render as tables with only condition, canary outcome and step state coloured. Daemon text is printed with markup off; piped output keeps one row per line; tracebacks hide local variables.
+Why: cleaner command definitions than argparse plus a hand-written table helper, and a readable `--help` without extra work.
+Cost: two more dependencies (typer, rich) in the cluster manager.
+
+## File server
+
+Single-file FastAPI app, one directory per job. The fetch is idempotent, hashes while streaming, rejects anything that isn't a valid zip, and writes `job.json` last. One hypertree URL per job (GET/PUT, 409 once present). No auth, nothing deleted, one process.
+Cost: disk grows until deletion is designed.
+
+## Packaging
+
+**Three separate projects, `agent`, `cluster-manager` and `file-server` (2026-11-04).**
+Each has its own `pyproject.toml`, `.gitignore`, `.env.example`, README and `deploy/` unit, and its own virtualenv. No project imports another. The agent's project and distribution are named `agent`, its unit `agent.service`, its folder `/opt/agent`.
+Why: each goes to a different machine, so each must install on its own.
+Cost: nothing checks the two `wire.py` copies match; `agent` and `/opt/agent` are generic names on a shared box.
+
+**Installed by hand, from each project's README; no install scripts (2026-11-04).**
+The steps: virtualenv in the project folder, `pip install -e .`, `.env` from `.env.example`, run the command in the foreground, then copy the unit from `deploy/`.
+Why: the owner installs each machine himself and wants to see every step. The install is editable so each config finds the `.env` next to its own source.
+
+**Every service is one console script, and systemd runs the same command (2026-11-04).**
+`agent`, `cm daemon` and `file-server`. Each runs uvicorn with the app object, so each is one process.
+Why: a clean way to run each service in a terminal, identical to what the unit runs. `cm daemon` keeps the cluster manager to one command.
+
+**Every service reads `.env` from its own project folder (2026-11-04).**
+The daemon's `daemon.env` became `.env`, and the file server moved from environment variables (with a default timeout) to a `.env` read by pydantic-settings with the same rules as the others: no defaults, unknown keys rejected, environment ignored. Its port moved from the unit's command line into `.env`.
+Why: one rule for all three, and a foreground run needs nothing exported.
+
+**The code lives in the GitHub repository `TylerGoh/cm`; a release is a commit (2026-11-04).**
+The docs live in its `docs/`. A release zip is `git archive` of a commit.
+Why: moves, renames and small edits are cheap in git and expensive as whole-document rewrites in the claude.ai project.
+
+**`rename_term.sh` sits at the top of the repository** and renames an alias in every form across the three projects.

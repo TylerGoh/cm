@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# build output
+build/
+dist/
+*.egg-info/
+
+# virtualenvs
+.venv/
+venv/
+
+# live settings; .env.example is committed
+.env
+
+# the daemon's SQLite database, if DATABASE_URL points inside this folder
+*.db
+*.db-wal
+*.db-shm

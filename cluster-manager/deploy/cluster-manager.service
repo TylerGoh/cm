@@ -1,0 +1,14 @@
+[Unit]
+Description=Cluster manager daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/cluster-manager
+ExecStart=/opt/cluster-manager/.venv/bin/cm daemon
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target

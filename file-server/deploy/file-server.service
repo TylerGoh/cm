@@ -1,0 +1,14 @@
+[Unit]
+Description=Internal file server (artifacts and hypertrees)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/file-server
+# One process: the per-job locks live in memory. Settings come from /opt/file-server/.env.
+ExecStart=/opt/file-server/.venv/bin/file-server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

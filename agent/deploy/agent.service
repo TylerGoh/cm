@@ -1,0 +1,20 @@
+[Unit]
+Description=Agent (worker supervisor)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/agent
+ExecStart=/opt/agent/.venv/bin/agent
+Restart=always
+RestartSec=5
+# The worker must survive an agent restart (reattach relies on it). With the default
+# KillMode=control-group, stopping the agent would also kill the worker it spawned.
+KillMode=process
+# Open connections (5s) + the tick in progress (up to the 5s heartbeat) + the ~20s operation grace.
+TimeoutStopSec=40
+# The worker's console logs go to /tmp; a private /tmp would hide them.
+PrivateTmp=no
+
+[Install]
+WantedBy=multi-user.target
