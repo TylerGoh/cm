@@ -24,6 +24,7 @@ agent/
   health.py        HealthMonitor (own loop)
   performance.py   PerformanceMonitor (own loop): failed-request ratio over a sliding window
   inventory.py     InventoryExporter (own loop): host record to Elastic
+  metrics_exporter.py  MetricsExporter (own loop): the worker's metrics to Elastic
   elastic.py       ElasticClient: data documents only, two indexes, awaited directly, best effort
   models.py        agent-internal runtime and persisted models, HostInfo
   wire.py          contract with the cluster manager
@@ -34,6 +35,7 @@ tests/
   test_performance.py    judge, full window, counter reset, gate reset, metrics_available, settings
   test_worker_client.py  metrics all-or-nothing, missing names logged once, queries return None, health on the
                          version endpoint, reload phases
+  test_metrics_exporter.py  documents use the field names, only while RUNNING, no key clashes
   test_operations.py     every OpType: plan builds, context covers initial_requires; step names and settings,
                          FORCE_UPDATE's hypertree steps, no upload in CRASH_RESTART
   test_process.py        real processes: start/wait_for_log/stop, old ready lines ignored, early exit, hang,
@@ -57,7 +59,7 @@ Import direction:
 
 ```
 wire → models, pipeline, state_store → worker_client, elastic → process, updates, feed
-  → decide, operations, health, performance, inventory → supervisor → app → __main__
+  → decide, operations, health, performance, inventory, metrics_exporter → supervisor → app → __main__
 ```
 
 `config.py` is imported only by `app.py` and `__main__.py`; every other module receives values.
@@ -311,7 +313,7 @@ Every state change in `tick` is synchronous (`_set_memory`, `_start_operation`, 
 
 ## Monitoring
 
-Metrics, performance and getting data into Elastic are separate concerns. Metrics are the raw readings (`worker_client.py`). Performance is the agent's judgement over them (`performance.py`). What a metrics document in Elastic contains is not decided.
+Metrics, performance and getting data into Elastic are separate concerns. Metrics are the raw readings (`worker_client.py`). Performance is the agent's judgement over them (`performance.py`). Exporting the readings to Elastic is the metrics exporter's job (`metrics_exporter.py`).
 
 Health is read directly: the worker's version endpoint is the cheapest ping, and answering it is the liveness check (the process is answering), so a dependency outage doesn't fail it. The worker only stops answering while doing blocking IO during an operation the agent drives, never on its own. Performance is inferred: the agent judges from raw numbers against its own thresholds. That's why `healthy` and `violations` are separate report fields.
 
@@ -348,6 +350,7 @@ Code: `agent/worker_client.py` (`MetricSource`, `MetricType`, `WorkerMetrics`, `
 - The constructor is `WorkerClient(base_url, *, timeout, reload_timeout, transport)`. Each reload phase uses its own, longer `reload_timeout`; every other call uses `timeout`. `transport` is for tests (`httpx.MockTransport`).
 - One `WorkerClient` is built in the lifespan and passed directly to `ProcessManager`, `UpdateManager`, `HealthMonitor`, `PerformanceMonitor` and the `Supervisor`, sharing one connection pool.
 - Every `WorkerMetrics` field declares three things: a `MetricType` (`COUNTER` or `GAUGE`), a `MetricSource` (its endpoint), and its name at that endpoint (`validation_alias`, a real Pydantic parameter). `MetricType` and `MetricSource` are plain metadata that Pydantic ignores.
+- A metric has exactly two names. The intake name is the worker's JSON key (`requests.out.total`), the `validation_alias`, used only to read the worker's answer. The field name (`requests_out_total`) is its name everywhere after that: in the agent's code and in Elastic's metrics documents. There is no third, Elastic-only name.
 - `_derive()` runs at import. It builds `METRIC_SOURCES` (endpoint → names at that endpoint), `COUNTER_FIELDS` and `GAUGE_FIELDS` (agent-side field names), and raises `TypeError` if a field lacks a `MetricSource`, a `MetricType` or a string alias, or if an alias is used twice.
 - An endpoint may serve both counters and gauges; each field declares its own type.
 - `WorkerMetrics` describes the worker only. What the agent does with the readings is decided in `performance.py`, not here.
@@ -374,7 +377,7 @@ The window:
 - A counter that went down means the worker restarted: the window starts again from that reading.
 - Active only while the worker is RUNNING and no operation runs. Otherwise it forgets everything (readings, verdict, failure count), so every verdict describes one uninterrupted run of one version. The gate is checked again after `metrics()` returns, since an operation can start during the read and an in-place reload restarts nothing.
 
-Nothing is sent to Elastic from the monitor; what a metrics document contains is open.
+Nothing is sent to Elastic from the monitor; the metrics exporter sends the readings, taking its own.
 
 `violations` stays three-valued: `None` = no verdict, `[]` = ok, list = problems. Each problem is a free-text message for humans (for example "error rate 6.0% > 5%"). Nothing branches on which check failed, so a violation carries no check key.
 
@@ -391,10 +394,21 @@ Nothing is sent to Elastic from the monitor; what a metrics document contains is
 
 Code: `agent/elastic.py` (`ElasticClient`). `ElasticClient(base_url, host, *, cert_path, metrics_index, host_index, timeout)`.
 
-- Two indexes. `index_host(doc)` writes to the host index (inventory records and the `agent_started` record, told apart by its `event` field); `index_metrics(doc)` writes to the metrics index. Callers never see index names. Nothing calls `index_metrics` yet.
+- Two indexes. `index_host(doc)` writes to the host index (inventory records and the `agent_started` record, told apart by its `event` field); `index_metrics(doc)` writes to the metrics index (the metrics exporter's documents). Callers never see index names.
 - Every document gets the host's identity added here: `host` (the hostname), `ipv4` and `location` from `HostInfo`. Callers never add them.
 - TLS is verified against the CA certificate in `elastic.cert` (`ssl.create_default_context(cafile=cert_path)`). There is no authentication beyond that. A missing or unreadable certificate fails agent startup, since it's a configuration error rather than an Elastic outage.
 - Awaited directly by its callers. It never raises (cancellation still propagates), and logs the first failure and the recovery on `agent.elastic`. There's no queue and no log handler: Elastic receives data documents only, and logs go to the journal. Keep its timeout short, since the start record is awaited during startup.
+
+### metrics_exporter.py
+
+Code: `agent/metrics_exporter.py` (`DOCUMENT_KEYS`, `MetricsExporter`). `MetricsExporter(worker, elastic, feed, *, interval)` runs its own loop at a steady cadence, `interval` from `config.metrics_export_interval`. Like the inventory exporter, it judges nothing and nothing reads it.
+
+- Each step reads `Conditions`. Unless the worker is RUNNING it does nothing (the inventory records the status). Otherwise it calls `WorkerClient.metrics()` and, when that returns a reading, sends one document to the metrics index: `at`, `running_version` and `updating` from the feed, then every `WorkerMetrics` field under its field name (`reading.model_dump()`), plus the host fields `ElasticClient` adds.
+- Field names are the names in Elastic; the worker's own (dotted) names never leave the agent, so Elastic never reads `requests.out.total` as nested objects.
+- Counters are sent as the worker reports them, cumulative since it started; a dashboard derives rates. Gauges are the current value.
+- A failed reading sends nothing: the performance monitor already reports `metrics_available`.
+- It takes its own readings rather than sharing the performance monitor's, so neither depends on the other's cadence or gate. Exporting continues during an operation as long as the worker is RUNNING and answers; `updating` marks those documents.
+- `DOCUMENT_KEYS` (`at`, `running_version`, `updating`, `host`, `ipv4`, `location`) are taken: the constructor refuses a `WorkerMetrics` field with one of those names, and so does `tools/metrics_generator`.
 
 ### inventory.py
 
@@ -429,16 +443,16 @@ Logging setup stays out of `app.py`: importing `agent.app` (for example to test 
 
 The lifespan, startup half (before `yield`):
 1. Build the stores and run `_ensure_first_boot`.
-2. Build `HostInfo` from `config`, then `ConditionFeed`, `WorkerClient`, `ElasticClient`, `ClusterManagerClient`, `ProcessManager`, `UpdateManager`, `HealthMonitor`, `PerformanceMonitor`, `InventoryExporter` and the `Supervisor`. Each object gets only what it uses.
+2. Build `HostInfo` from `config`, then `ConditionFeed`, `WorkerClient`, `ElasticClient`, `ClusterManagerClient`, `ProcessManager`, `UpdateManager`, `HealthMonitor`, `PerformanceMonitor`, `InventoryExporter`, `MetricsExporter` and the `Supervisor`. Each object gets only what it uses.
 3. `_record_start`: one `agent_started` document (`event`, `at`, `agent_version`, plus the host fields) to the host index before any loop starts. `agent_version` is the installed version of the `agent` distribution (`DISTRIBUTION` in `app.py`), or `"unknown"` when running from a source tree that isn't installed. Best effort; a down Elastic doesn't block startup, and the document is then lost.
-4. Start explicit tasks (not a TaskGroup): `tick_loop`, `health.run()`, `performance.run()`, `inventory.run()`.
+4. Start explicit tasks (not a TaskGroup): `tick_loop`, `health.run()`, `performance.run()`, `inventory.run()`, `metrics_exporter.run()`.
    - The tick task has `_exit_if_failed`: if it ends with an exception, it logs and sends the process SIGTERM, so uvicorn shuts down and systemd restarts the agent.
    - The other tasks have `_log_if_failed`: a crash is logged and the supervisor keeps running.
 
 The shutdown half (after `yield`, in `finally` so it also runs when the lifespan is left by an exception), in order:
 1. Cancel the tick task and wait for it.
 2. `supervisor.shutdown()`.
-3. Cancel the monitors and the exporter, and wait for them.
+3. Cancel the monitors and the exporters, and wait for them.
 4. Close the update manager's file-server client, then the worker, Elastic and cluster manager clients. Nothing uses the `WorkerClient` by then, since the tick loop, the operation and the monitors have finished.
 
 The agent serves no routes: the cluster manager never calls it, and the heartbeat is the only status channel. uvicorn runs the lifespan before it binds the port, so a second agent started by hand runs its first tick before failing to bind; systemd prevents that in practice.

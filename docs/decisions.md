@@ -166,6 +166,10 @@ Why: the contract is pure description, so a generator keeps it consistent; the j
 ## Elastic
 
 **Best effort, never raises, no queue, no logs.** Logs go to the journal only.
+
+**The worker's metrics are exported on their own interval, under their field names (2026-11-05).**
+A metrics exporter loop sends one document per `METRICS_EXPORT_INTERVAL` while the worker is RUNNING: the reading's fields, plus `at`, `running_version`, `updating` and the host fields. Counters go cumulative. A metric has two names only: the intake name (the worker's JSON key, the `validation_alias`) and the field name, which is also its Elastic name.
+Why: the owner wants the raw metrics in Elastic on a fixed cadence; the worker's dotted names would become nested objects in Elastic, so they stay on the intake side.
 **Two indexes, metrics and host;** the client adds `host`, `ipv4`, `location` to every document. TLS uses the CA in `elastic.cert`; a missing cert fails startup.
 
 ## Agent app

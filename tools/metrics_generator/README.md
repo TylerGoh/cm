@@ -41,6 +41,15 @@ endpoints:                           # each a GET answering one flat JSON object
       - {name: rss_bytes, field: rss_bytes, type: gauge}
 ```
 
+Each metric has two names:
+
+- `name` is for intake: the key in the worker's JSON, exactly as the worker sends it. It is only
+  used to read the worker's answer (the field's `validation_alias`).
+- `field` is the metric's name everywhere after that: in the agent's code and in Elastic. The
+  agent's metrics exporter sends each reading to the metrics index under the field names, every
+  `METRICS_EXPORT_INTERVAL`, along with `at`, `running_version`, `updating` and the host fields,
+  so a field can't take one of those names.
+
 One endpoint can mix counters and gauges. Every `field` and every `name` must be unique across
 the file. Mistakes are reported with the entry they are in, before anything is written.
 

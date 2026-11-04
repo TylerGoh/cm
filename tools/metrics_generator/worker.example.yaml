@@ -7,9 +7,11 @@ reload_phase1_path: /reload_phase1   # GET, no body, blocks until phase 1 is don
 reload_phase2_path: /reload_phase2   # GET, no body, blocks until the worker runs the new code
 
 # Each endpoint is a GET that answers one flat JSON object. One endpoint may mix counters and
-# gauges. For each metric:
-#   name         its key in the endpoint's JSON, exactly as the worker sends it
-#   field        the WorkerMetrics field name (snake_case); performance.py reads it by this name
+# gauges. Each metric has two names: one for intake, one for Elastic.
+#   name         intake: its key in the endpoint's JSON, exactly as the worker sends it
+#   field        its name in Elastic's metrics documents (snake_case); also the WorkerMetrics
+#                field that performance.py reads. Not one of: at, running_version, updating,
+#                host, ipv4, location (every document already has those)
 #   type         counter (cumulative since the worker started) or gauge (a current value)
 #   description  optional; becomes a comment after the field
 # An endpoint's Python name is derived from its path (/stats/queue -> STATS_QUEUE_ENDPOINT);

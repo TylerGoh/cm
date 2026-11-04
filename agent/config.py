@@ -76,6 +76,7 @@ class AgentConfig(BaseSettings):
     max_metrics_failures: int
     inventory_interval: float            # at least one tick (10s); shorter only sends duplicates
     require_running: bool
+    metrics_export_interval: float       # seconds between metrics documents to Elastic
 
     # cluster manager
     cluster_manager_url: str

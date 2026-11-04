@@ -15,6 +15,7 @@ from agent.elastic import ElasticClient
 from agent.feed import ConditionFeed
 from agent.health import HealthMonitor
 from agent.inventory import InventoryExporter
+from agent.metrics_exporter import MetricsExporter
 from agent.performance import PerformanceMonitor
 from agent.models import AgentMemory, HostInfo, ProcessMemory
 from agent.process import ProcessManager
@@ -123,6 +124,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                                      max_failures=config.max_metrics_failures)
     inventory = InventoryExporter(elastic, feed, interval=config.inventory_interval,
                                   require_running=config.require_running)
+    metrics_exporter = MetricsExporter(worker, elastic, feed, interval=config.metrics_export_interval)
     supervisor = Supervisor(host.ipv4, process, updates, worker, health, performance, feed,
                             cluster_manager, memory_store)
 
@@ -134,6 +136,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         asyncio.create_task(health.run(), name="health"),
         asyncio.create_task(performance.run(), name="performance"),
         asyncio.create_task(inventory.run(), name="inventory"),
+        asyncio.create_task(metrics_exporter.run(), name="metrics_exporter"),
     ]
     for task in background:
         task.add_done_callback(_log_if_failed)

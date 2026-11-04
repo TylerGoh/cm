@@ -19,6 +19,9 @@ HERE = Path(__file__).resolve().parent
 OUTPUT = HERE / "generated_worker_contract.py"
 SNAKE_CASE = re.compile(r"^[a-z][a-z0-9_]*$")
 CONSTANT_CASE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+# Keys every metrics document in Elastic already carries (agent/agent/metrics_exporter.py,
+# DOCUMENT_KEYS), so no metric field may take one of them.
+DOCUMENT_KEYS = frozenset({"at", "running_version", "updating", "host", "ipv4", "location"})
 
 
 # --- the YAML file's shape ---
@@ -31,8 +34,8 @@ class MetricKind(StrEnum):
 class MetricSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    name: str                           # its key in the endpoint's JSON, exactly as the worker sends it
-    field: str                          # the WorkerMetrics field name, snake_case
+    name: str                           # intake: its key in the endpoint's JSON, exactly as the worker sends it
+    field: str                          # its name in Elastic, and the WorkerMetrics field; snake_case
     type: MetricKind
     description: str | None = None      # becomes a comment after the field
 
@@ -41,6 +44,9 @@ class MetricSpec(BaseModel):
     def _field_is_a_python_name(cls, value: str) -> str:
         if not SNAKE_CASE.match(value) or keyword.iskeyword(value):
             raise ValueError(f"{value!r} must be snake_case and not a Python keyword")
+        if value in DOCUMENT_KEYS:
+            raise ValueError(f"{value!r} is already a key of every metrics document; "
+                             f"choose another (taken: {', '.join(sorted(DOCUMENT_KEYS))})")
         return value
 
 

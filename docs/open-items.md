@@ -73,7 +73,7 @@ Every model and repository is written and ported to SQLite (2026-11-02 and 2026-
 
 ## Not designed yet
 
-- What goes into a metrics document for Elastic. `ElasticClient.index_metrics` and the metrics index exist; nothing calls them. `docs/metrics-draft.md` is superseded by `performance.py` and can be deleted once nothing in it is wanted (the Elastic document idea is the only piece not carried over).
+- `docs/metrics-draft.md` is fully superseded (by `performance.py` and the metrics exporter) and can be deleted.
 - Alerting, to be added later. Candidates so far: an automatic rollback (today it is only logged and recorded in `unstable_reason`), an ACTIVE that came from a rollback breaching the fleet limits (it isn't rolled back, and nothing says so), and canary agents that didn't converge.
 - `cm status` doesn't show the fleet watch's verdict or a breach in progress; only the daemon's log does.
 - The worker's real endpoint paths and `WorkerMetrics` fields, and the performance judgement over them (the owner codes it). `agent/worker_client.py` uses mock ones (`/show_version`, `/counters`, `/reload_phase1`, `/reload_phase2`).
