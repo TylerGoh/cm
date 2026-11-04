@@ -30,6 +30,6 @@ async def version_dispatch(session: Session, request: Request, body: DispatchReq
 @router.post("/rollback", response_model=RollbackResponse)
 async def rollback(session: Session) -> RollbackResponse:
     try:
-        return await versions.rollback(session)
+        return await versions.rollback(session, reason="rolled back by request", expected_active=None)
     except ActionRefused as e:
         raise HTTPException(status_code=409, detail=str(e))

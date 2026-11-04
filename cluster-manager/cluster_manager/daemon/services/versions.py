@@ -1,10 +1,12 @@
 """The version_deployments flows: the startup bootstrap, dispatch (new -> VERIFYING), the canary
-judgement at its deadline (VERIFYING -> ACTIVE or UNSTABLE), and a requested rollback (ACTIVE ->
-UNSTABLE, latest STABLE -> ACTIVE). Each flow is one transaction that keeps exactly one ACTIVE:
-leaving ACTIVE always happens with another version becoming ACTIVE, demoting first and flushing,
-since the one-ACTIVE index is checked per statement."""
+judgement at its deadline (VERIFYING -> ACTIVE or UNSTABLE), the ACTIVE fleet's verdict, and a
+rollback (ACTIVE -> UNSTABLE, latest STABLE -> ACTIVE), requested by a human or by the fleet
+watch. Each flow is one transaction that keeps exactly one ACTIVE: leaving ACTIVE always happens
+with another version becoming ACTIVE, demoting first and flushing, since the one-ACTIVE index is
+checked per statement."""
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, UTC
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -19,7 +21,9 @@ from cluster_manager.daemon.db.repositories.desired_state_repo import DesiredSta
 from cluster_manager.daemon.db.repositories.observed_state_repo import ObservedStateRepo
 from cluster_manager.daemon.db.repositories.version_deployment_repo import VersionDeploymentRepo
 from cluster_manager.daemon.db.session import session_factory
-from cluster_manager.daemon.services.conditions import canary_outcome, canary_rejected, count_outcomes
+from cluster_manager.daemon.services.conditions import (
+    FleetLimits, canary_outcome, canary_rejected, count_outcomes, fleet_failing, fleet_outcome,
+)
 from cluster_manager.daemon.services.desired_state import history_row
 from cluster_manager.daemon.services.errors import ActionRefused
 from cluster_manager.daemon.services.views import canary_limits
@@ -158,14 +162,52 @@ async def judge_canary(version: str) -> None:
                  version, _counts_text(counts), len(fleet))
 
 
-# --- rollback ---
+# --- the ACTIVE fleet ---
 
-async def rollback(session: AsyncSession) -> RollbackResponse:
-    """Requested by a human: ACTIVE -> UNSTABLE and the latest STABLE -> ACTIVE, and the main fleet
-    follows. Never chains: an ACTIVE that came from a rollback isn't rolled back. Agents running a
-    VERIFYING canary stay on it. What triggers a rollback automatically is not designed yet."""
+@dataclass(frozen=True, slots=True)
+class FleetVerdict:
+    version: str                                 # the ACTIVE version judged
+    counts: dict[CanaryOutcome, int]             # agents that count, per outcome
+    failing: bool                                # some bucket is over its limit
+
+
+def fleet_limits() -> FleetLimits:
+    return FleetLimits(
+        max_crashes=config.fleet_max_crashes,
+        max_violations=config.fleet_max_violations,
+        max_not_converged=config.fleet_max_not_converged,
+    )
+
+
+async def fleet_verdict(session: AsyncSession, now: datetime) -> FleetVerdict | None:
+    """Judges the agents running the ACTIVE version, by the canary's rules with the fleet's limits.
+    None when there is nothing a failure could do: the ACTIVE came from a rollback (rollbacks
+    don't chain) or there is no STABLE version to roll back to. Reads only."""
     versions = VersionDeploymentRepo(session)
     active = await versions.active()
+    if active.activated_by_rollback or await versions.latest_stable() is None:
+        return None
+    outcomes: list[CanaryOutcome] = []
+    for _, desired, observed in await AgentRepo(session).list_live(active.version):
+        outcome = fleet_outcome(desired, observed, now=now, non_responding_after=config.non_responding_after)
+        if outcome is not None:
+            outcomes.append(outcome)
+    counts = count_outcomes(outcomes)
+    return FleetVerdict(version=active.version, counts=counts, failing=fleet_failing(counts, fleet_limits()))
+
+
+# --- rollback ---
+
+async def rollback(session: AsyncSession, *, reason: str, expected_active: str | None) -> RollbackResponse:
+    """ACTIVE -> UNSTABLE and the latest STABLE -> ACTIVE, and the main fleet follows. Requested by
+    a human (`cm rollback`) or by the fleet watch, whose `reason` lands in `unstable_reason`.
+    Never chains: an ACTIVE that came from a rollback isn't rolled back. Agents running a
+    VERIFYING canary stay on it. With `expected_active`, it refuses unless that version is still
+    the ACTIVE one, so a verdict about one version never rolls back another."""
+    versions = VersionDeploymentRepo(session)
+    active = await versions.active()
+    if expected_active is not None and active.version != expected_active:
+        raise ActionRefused(f"{expected_active} is no longer ACTIVE ({active.version} is)")
     if active.activated_by_rollback:
         raise ActionRefused(f"{active.version} became ACTIVE by a rollback; rollbacks don't chain")
     target = await versions.latest_stable()
@@ -174,7 +216,7 @@ async def rollback(session: AsyncSession) -> RollbackResponse:
 
     now = datetime.now(UTC)
     active.status = DeploymentStatus.UNSTABLE
-    active.unstable_reason = f"rolled back by request at {now.isoformat()}"
+    active.unstable_reason = f"{reason} at {now.isoformat()}"
     await session.flush()                            # demote first: the one-ACTIVE index is per statement
     target.status = DeploymentStatus.ACTIVE
     target.activated_by_rollback = True

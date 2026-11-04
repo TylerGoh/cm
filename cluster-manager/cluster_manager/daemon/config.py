@@ -53,6 +53,12 @@ class DaemonConfig(BaseSettings):
     canary_max_violations: int
     canary_max_not_converged: int
 
+    # the ACTIVE fleet after promotion: the canary's buckets with higher limits, judged every tick
+    fleet_max_crashes: int
+    fleet_max_violations: int
+    fleet_max_not_converged: int
+    fleet_breach_seconds: float          # over a limit this long rolls back automatically; 0 = at once
+
     # notifications
     mattermost_webhook_url: str          # empty: nothing is sent, incidents stay pending
     mattermost_timeout: float
@@ -64,6 +70,10 @@ class DaemonConfig(BaseSettings):
     @property
     def canary_duration(self) -> timedelta:
         return timedelta(seconds=self.canary_duration_seconds)
+
+    @property
+    def fleet_breach_duration(self) -> timedelta:
+        return timedelta(seconds=self.fleet_breach_seconds)
 
 
 if not ENV_FILE.exists():

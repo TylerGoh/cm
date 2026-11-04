@@ -33,7 +33,6 @@ Both are written out (2026-11-04 entries). Still open:
 Identity, the reply and the `DesiredState` shape are settled (2026-11-01 entries). Still to work through:
 
 - Cluster-manager-only behaviour: watchers (CRASHED_HOLD, `failed_generation == generation`, `acknowledged_generation > generation`), the per-agent success checklist, the force-bump and crashed-rollback rules, the `max()` on handled counters versus re-provisioning, and the watcher queries including decommissioned agents.
-- The higher post-promotion threshold: what it measures (probably the same failed ratio with a higher limit), its value, and whether it triggers the rollback automatically or through the client's roll-back request. A rollback can only be requested by a human today.
 
 ## Canary
 
@@ -41,7 +40,6 @@ The canary is designed and written (2026-11-02 and 2026-11-04 entries). Still op
 
 - NOT_CONVERGED probably needs its own handler, and maybe a warning, rather than only counting toward a rejection. For now it rejects the canary past `canary_max_not_converged`.
 - The limits are fixed counts, but the sample can shrink. With a sample of one and `canary_max_crashes` at one, a canary can't fail on crashes.
-- Whether `metrics_available=False` at the canary deadline should be its own outcome rather than NO_VERDICT. Such an agent can't vouch for the version's performance.
 
 ## Cluster manager daemon and client
 
@@ -76,6 +74,7 @@ Every model and repository is written and ported to SQLite (2026-11-02 and 2026-
 ## Not designed yet
 
 - What goes into a metrics document for Elastic. `ElasticClient.index_metrics` and the metrics index exist; nothing calls them. `docs/metrics-draft.md` is superseded by `performance.py` and can be deleted once nothing in it is wanted (the Elastic document idea is the only piece not carried over).
-- Alerting, to be added later. Candidates so far: an ACTIVE that came from a rollback breaching the higher threshold (it isn't rolled back), and canary agents that didn't converge.
+- Alerting, to be added later. Candidates so far: an automatic rollback (today it is only logged and recorded in `unstable_reason`), an ACTIVE that came from a rollback breaching the fleet limits (it isn't rolled back, and nothing says so), and canary agents that didn't converge.
+- `cm status` doesn't show the fleet watch's verdict or a breach in progress; only the daemon's log does.
 - The worker's real endpoint paths and `WorkerMetrics` fields, and the performance judgement over them (the owner codes it). `agent/worker_client.py` uses mock ones (`/show_version`, `/counters`, `/reload_phase1`, `/reload_phase2`).
 - `tests/test_decide.py`, `tests/test_pipeline.py`, tests for the daemon beyond the canary judgement, and `tests/integration/`.

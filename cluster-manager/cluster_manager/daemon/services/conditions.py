@@ -1,8 +1,9 @@
-"""Pure judgements over one agent's rows. No IO, so the views, the canary job and the tests
-all get the same answer."""
+"""Pure judgements over one agent's rows. No IO, so the views, the canary job, the fleet watch
+and the tests all get the same answer."""
 
 from collections import Counter
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from cluster_manager.daemon.db.models.desired_state import DesiredStateRow
@@ -68,5 +69,40 @@ def canary_rejected(counts: dict[CanaryOutcome, int], limits: CanaryLimits) -> b
     crashes = counts[CanaryOutcome.FAULTY_UPDATE] + counts[CanaryOutcome.CRASHED]
     return (converged == 0
             or crashes > limits.max_crashes
+            or counts[CanaryOutcome.PERFORMANCE] > limits.max_violations
+            or counts[CanaryOutcome.NOT_CONVERGED] > limits.max_not_converged)
+
+
+# --- the ACTIVE fleet, judged continuously after promotion ---
+
+@dataclass(frozen=True, slots=True)
+class FleetLimits:
+    """How many agents of the ACTIVE fleet may be in each bucket before it fails. The canary's
+    buckets, with their own (higher) limits."""
+    max_crashes: int
+    max_violations: int
+    max_not_converged: int
+
+
+def fleet_outcome(desired: DesiredStateRow, observed: ObservedState, *,
+                  now: datetime, non_responding_after: timedelta) -> CanaryOutcome | None:
+    """One ACTIVE-fleet agent's outcome, by the canary's rules, or None when it doesn't count:
+    it is non-responding, it is meant to be stopped, or it is still settling (it hasn't
+    acknowledged its current desired state, or an operation is running). Settling agents are
+    left out because the whole fleet is not converged for a while after every promotion."""
+    if now - observed.last_heartbeat_at > non_responding_after:
+        return None
+    if not desired.desired_running:
+        return None
+    if observed.acknowledged_generation < desired.generation or observed.current_operation is not None:
+        return None
+    return canary_outcome(desired, observed)
+
+
+def fleet_failing(counts: dict[CanaryOutcome, int], limits: FleetLimits) -> bool:
+    """Any bucket over its limit. Unlike the canary, a fleet with nothing to count isn't failing:
+    right after a promotion every agent may still be settling."""
+    crashes = counts[CanaryOutcome.FAULTY_UPDATE] + counts[CanaryOutcome.CRASHED]
+    return (crashes > limits.max_crashes
             or counts[CanaryOutcome.PERFORMANCE] > limits.max_violations
             or counts[CanaryOutcome.NOT_CONVERGED] > limits.max_not_converged)

@@ -15,7 +15,7 @@ from cluster_manager.daemon.clients.file_server import FileServerClient
 from cluster_manager.daemon.clients.mattermost import MattermostClient
 from cluster_manager.daemon.config import config
 from cluster_manager.daemon.db.session import check_sqlite_version, create_schema, engine, session_factory
-from cluster_manager.daemon.loops import sender, watcher
+from cluster_manager.daemon.loops import fleet_watch, sender, watcher
 from cluster_manager.daemon.services import versions
 
 log = logging.getLogger("cluster_manager")
@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     loops = [
         asyncio.create_task(watcher.run(), name="watcher"),
         asyncio.create_task(sender.run(mattermost), name="sender"),
+        asyncio.create_task(fleet_watch.run(), name="fleet_watch"),
     ]
     for task in loops:
         task.add_done_callback(_log_if_failed)

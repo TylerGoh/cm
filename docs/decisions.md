@@ -206,7 +206,14 @@ Cost: until metrics flow, a canary can only fail on crashes, faulty updates or n
 A canary where no agent runs the new version at the deadline is rejected whatever the limits, including one whose agents were all decommissioned. The example settings put `CANARY_MAX_NOT_CONVERGED` at 0, so any agent not converged rejects it.
 Why: passing would promote a version on no evidence.
 
-**At most one rollback in a row.** An ACTIVE that came from a rollback is never rolled back. Rollback is a human request for now. `unstable_reason` records why.
+**At most one rollback in a row.** An ACTIVE that came from a rollback is never rolled back. `unstable_reason` records why.
+
+**A promoted version is judged for as long as it is ACTIVE, and rolled back automatically (2026-11-05).**
+The fleet watch judges the agents on the ACTIVE version every tick by the canary's rules, with higher limits (`FLEET_MAX_*`). A breach that lasts `FLEET_BREACH_SECONDS` rolls back to the latest STABLE. Agents still settling (not yet acknowledged, or mid-operation), silent agents and agents stopped on purpose don't count.
+Why: the owner wants the same health rules after promotion, needing more failing agents to act, and no human in the loop. Settling agents are left out, or every promotion would fail at once; a breach must last, or a crash caught between the worker dying and the agent restarting it could roll back a good version.
+Cost: a version that fails only slowly, or on fewer agents than the limits, stays ACTIVE.
+
+**No verdict at the canary deadline is fine (2026-11-05).** An agent whose metrics are unavailable is NO_VERDICT, which counts in no bucket.
 
 **Non-responding after 3 missed ticks.** Incidents (`non_responding`, `metrics_unavailable`), at most one open per agent and kind. A sender posts openings and recoveries to Mattermost after commit, marking each sent only on success.
 

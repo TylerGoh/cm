@@ -64,6 +64,11 @@ cm --json agents                # global options go before the command
 - **`BOOTSTRAP_VERSION` and `BOOTSTRAP_UPSTREAM_URL`** are read on the first boot only.
 - **Mattermost**: with an empty `MATTERMOST_WEBHOOK_URL` nothing is sent. Incidents wait, and go
   out once it is set and the daemon restarted.
+- **Automatic rollback**: a promoted version is judged every 10 seconds for as long as it is
+  ACTIVE, by the canary's rules with the `FLEET_MAX_*` limits. If it stays over a limit for
+  `FLEET_BREACH_SECONDS`, the daemon rolls back to the latest STABLE version on its own;
+  `cm versions` shows why. An existing `.env` needs the four `FLEET_*` keys added, or the daemon
+  won't start.
 - **One process only**: the canary scheduler and the loops live in it.
 - **Upgrading**: replace everything in this folder except `.venv` and `.env`, run
   `.venv/bin/pip install -e .` again, then restart.
