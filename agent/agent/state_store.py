@@ -16,10 +16,16 @@ class JsonStore[T: BaseModel]:
         return self._model.model_validate_json(self._path.read_text())
 
     def save(self, value: T) -> None:
-        """Atomic: write a temp file, fsync it, then replace the real one."""
+        """Atomic: write a temp file, fsync it, replace the real one, then fsync the folder so the
+        rename itself survives a power loss."""
         tmp = self._path.with_suffix(self._path.suffix + ".tmp")
         with tmp.open("w") as f:
             f.write(value.model_dump_json())
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, self._path)
+        folder = os.open(self._path.parent, os.O_RDONLY)
+        try:
+            os.fsync(folder)
+        finally:
+            os.close(folder)

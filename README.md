@@ -15,21 +15,24 @@ its own `.env.example` and `.gitignore`, and a systemd unit in `deploy/`.
 
 1. **Get a release.** `git archive -o release.zip HEAD` from a clone, then unzip it. Work in the
    top folder, the one holding this README.
-2. **Rename aliases, if any.** Some names in the code stand in for the real ones. Rename them
+2. **Rename the placeholders.** `hypertree`, `etc_dir` and `program_log` stand in for the real
+   names. Fill in the real ones in the checklist at the top of `rename_term.sh`, then run it,
    before filling in any `.env`, so the `.env.example` keys already carry the real names:
 
    ```bash
-   ./rename_term.sh --dry-run hypertree speedtree     # shows what would change
-   ./rename_term.sh hypertree speedtree
+   ./rename_term.sh --dry-run     # shows what would change
+   ./rename_term.sh
    ```
 
    Renaming `hypertree` changes the agent ↔ daemon wire and the file server's paths, so all three
    must be reinstalled together.
-3. **Fill in the settings.** In each folder, `cp .env.example .env` and fill it in. Every key is
+3. **Check the wire.** `./check_wire.sh` confirms the agent's and the daemon's copies of
+   `wire.py` are identical. A difference means heartbeats would fail.
+4. **Fill in the settings.** In each folder, `cp .env.example .env` and fill it in. Every key is
    required and no others are allowed. Each worker box needs its own agent `.env` (`IPV4`,
    `HOSTNAME`, `LOCATION`); where Foreman writes it, leave it out here.
-4. **Copy each folder to its machine**, for example `scp -r file-server user@files-host:/opt/`.
-5. **On each machine, follow that folder's README.** Each service runs in the foreground with its
+5. **Copy each folder to its machine**, for example `scp -r file-server user@files-host:/opt/`.
+6. **On each machine, follow that folder's README.** Each service runs in the foreground with its
    command first, then as a systemd service.
 
 Install order the first time:
@@ -50,6 +53,12 @@ service. The units expect each folder at `/opt/<folder>` and run as root.
 - The daemon's `CANARY_DURATION_SECONDS` comfortably exceeds an update plus the agent's
   `PERFORMANCE_WINDOW_SECONDS`.
 - Agents never need the file server's address: the daemon gives them complete URLs.
+
+## The worker's metrics
+
+The agent's worker contract (the worker's paths and its metrics) is generated, not written by
+hand: describe the worker in YAML and run `tools/metrics_generator/generate.py`. Its README says
+how to paste the result into the agent, and has a sample performance judgement.
 
 ## Docs
 

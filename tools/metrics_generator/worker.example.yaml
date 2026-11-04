@@ -1,0 +1,31 @@
+# The worker's contract, as generate.py reads it. This example produces the (mock) block that is
+# in agent/agent/worker_client.py today. Copy it, put in the real paths and metrics, and run
+#   python generate.py worker.yaml
+
+version_path: /show_version          # answers {"version": "..."}; also the health ping
+reload_phase1_path: /reload_phase1   # GET, no body, blocks until phase 1 is done
+reload_phase2_path: /reload_phase2   # GET, no body, blocks until the worker runs the new code
+
+# Each endpoint is a GET that answers one flat JSON object. One endpoint may mix counters and
+# gauges. For each metric:
+#   name         its key in the endpoint's JSON, exactly as the worker sends it
+#   field        the WorkerMetrics field name (snake_case); performance.py reads it by this name
+#   type         counter (cumulative since the worker started) or gauge (a current value)
+#   description  optional; becomes a comment after the field
+# An endpoint's Python name is derived from its path (/stats/queue -> STATS_QUEUE_ENDPOINT);
+# give `constant: SOME_NAME_ENDPOINT` to choose it yourself.
+endpoints:
+  - path: /counters
+    metrics:
+      - name: requests.out.total
+        field: requests_out_total
+        type: counter
+        description: sent out
+      - name: requests.old_failed.total
+        field: requests_old_failed_total
+        type: counter
+        description: failed because too old
+      - name: requests.out_lagged.total
+        field: requests_out_lagged_total
+        type: counter
+        description: failed because lagged

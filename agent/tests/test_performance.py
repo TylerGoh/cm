@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
-from agent import metrics
+from agent import performance
 from agent.feed import ConditionFeed, Conditions
-from agent.metrics import MetricsReading, PerformanceMonitor, judge
+from agent.performance import MetricsReading, PerformanceMonitor, judge
 from agent.wire import ProcessStatus
 from agent.worker_client import WorkerMetrics
 
@@ -37,7 +37,7 @@ def running(feed: ConditionFeed, busy: bool = False) -> None:
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     now = [0.0]
-    monkeypatch.setattr(metrics.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(performance.time, "monotonic", lambda: now[0])
     return now
 
 

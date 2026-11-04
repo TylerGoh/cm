@@ -45,7 +45,8 @@ class Plan:
 # UPDATE         download, clear_hypertree (non-critical),                 –         artifact, hypertree_get_url,
 #                fetch_hypertree (non-critical), reload, verify (retries=1),         hypertree_upload_url
 #                upload_hypertree (non-critical)
-# FORCE_UPDATE   download                                                  –         artifact
+# FORCE_UPDATE   download, clear_hypertree (non-critical),                 –         artifact, hypertree_get_url
+#                fetch_hypertree (non-critical)
 # START          start, wait_for_log                                       –         {}
 # CRASH_RESTART  stop, start, wait_for_log                                 –         {}
 # RESTART        stop, start, wait_for_log                                 –         {}
@@ -56,6 +57,8 @@ class Plan:
 # waits kill the process on timeout, so a retry can't succeed. A failed start ends as a crash
 # (dead pid in STARTING), so no recipe has a finally step. The hypertree steps only speed loading
 # up, so they are non-critical: their failures stay in the step log and never fail the update.
+# FORCE_UPDATE fetches the hypertree for the CRASH_RESTART that loads the new bundle next; nothing
+# uploads one after a CRASH_RESTART, since a hypertree is never worth risking a recovery for.
 
 def plan(op: OpType, desired: DesiredState, process: ProcessManager, updates: UpdateManager) -> Plan:
     s = _Stages(process, updates)
@@ -93,6 +96,8 @@ def plan(op: OpType, desired: DesiredState, process: ProcessManager, updates: Up
             pipeline = Pipeline(
                 steps=[
                     PipelineStep(s.download),
+                    PipelineStep(s.clear_hypertree, critical=False),
+                    PipelineStep(s.fetch_hypertree, critical=False),
                 ],
                 finally_steps=[],
             )
@@ -100,6 +105,7 @@ def plan(op: OpType, desired: DesiredState, process: ProcessManager, updates: Up
                 "artifact_url": desired.artifact_url,
                 "artifact_sha256": desired.artifact_sha256,
                 "version": desired.version,
+                "hypertree_get_url": desired.hypertree_get_url,
             })
         case OpType.START:
             pipeline = Pipeline(

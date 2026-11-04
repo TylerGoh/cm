@@ -8,7 +8,7 @@ from agent.feed import ConditionFeed
 from agent.wire import ProcessStatus
 from agent.worker_client import COUNTER_FIELDS, WorkerClient, WorkerMetrics
 
-log = logging.getLogger("agent.metrics")
+log = logging.getLogger("agent.performance")
 
 
 @dataclass(frozen=True, slots=True)

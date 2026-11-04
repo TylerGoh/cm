@@ -108,7 +108,7 @@ Cost: a hang verdict is lost after an operation or agent restart.
 | RESTART | `stop, start, wait_for_log` |
 | CRASH_RESTART | `stop, start, wait_for_log` |
 | UPDATE | `download, clear_hypertree*, fetch_hypertree*, reload, verify (retries=1), upload_hypertree*` |
-| FORCE_UPDATE | `download` |
+| FORCE_UPDATE | `download, clear_hypertree*, fetch_hypertree*` |
 
 `*` = non-critical. No recipe has finally steps.
 
@@ -126,6 +126,12 @@ Why: switching versions only ever changes links; the default install is never ha
 
 **Hypertrees are best effort.** Cleared before the load, fetched if present, and the one folder left after a successful load is zipped and uploaded.
 Why: a hypertree only speeds loads up, so it must never fail an update.
+
+**FORCE_UPDATE clears and fetches the hypertree; CRASH_RESTART never uploads one (2026-11-05).**
+Why: the CRASH_RESTART after a FORCE_UPDATE loads the new bundle, so it should start from the stored hypertree. An upload only speeds up later loads, which isn't worth risking a recovery for.
+
+**Reload phases are blocking GETs; success means done (2026-11-05).**
+Confirmed by the owner: each phase returns only when it has finished, so the agent never waits after one.
 
 **Reload is two worker calls in one step** (`reload_phase1`, `reload_phase2`).
 Why: a retry must repeat both.
@@ -151,6 +157,11 @@ Cost: no verdict for the first 5 minutes after an update.
 **A broken metrics source is reported as `metrics_available=False`;** the cluster manager alerts on it.
 
 **`WorkerClient` queries return `None` on failure; commands raise; `metrics()` is all or nothing.**
+A missing metric name is logged once, and again only after a complete reading (2026-11-05).
+
+**The worker contract is generated from YAML; the judgement is hand-written (2026-11-05).**
+`tools/metrics_generator` turns a YAML description of the worker (paths, endpoints, each metric's name, field and counter/gauge type) into the block between the markers in `worker_client.py`. An endpoint may mix counters and gauges. The performance judgement in `performance.py` (renamed from `metrics.py`) is coded by the owner, from the sample in the generator's README.
+Why: the contract is pure description, so a generator keeps it consistent; the judgement is policy, which the owner wants to write himself.
 
 ## Elastic
 
@@ -191,6 +202,10 @@ Why: agents depend only on infrastructure we own, and no canary starts on an una
 **Canary:** a random fixed-size sample of live, running agents; membership is derived from `desired_state.version`. Judged once at a deadline: each agent gets one outcome, counted against per-bucket limits (crashes, performance, not converged). Passing promotes automatically.
 Cost: until metrics flow, a canary can only fail on crashes, faulty updates or non-convergence.
 
+**A canary never passes without converged agents (2026-11-05).**
+A canary where no agent runs the new version at the deadline is rejected whatever the limits, including one whose agents were all decommissioned. The example settings put `CANARY_MAX_NOT_CONVERGED` at 0, so any agent not converged rejects it.
+Why: passing would promote a version on no evidence.
+
 **At most one rollback in a row.** An ACTIVE that came from a rollback is never rolled back. Rollback is a human request for now. `unstable_reason` records why.
 
 **Non-responding after 3 missed ticks.** Incidents (`non_responding`, `metrics_unavailable`), at most one open per agent and kind. A sender posts openings and recoveries to Mattermost after commit, marking each sent only on success.
@@ -204,8 +219,11 @@ Cost: two more dependencies (typer, rich) in the cluster manager.
 
 ## File server
 
-Single-file FastAPI app, one directory per job. The fetch is idempotent, hashes while streaming, rejects anything that isn't a valid zip, and writes `job.json` last. One hypertree URL per job (GET/PUT, 409 once present). No auth, nothing deleted, one process.
-Cost: disk grows until deletion is designed.
+Single-file FastAPI app, one directory per job. The fetch is idempotent, hashes while streaming, rejects anything that isn't a valid zip, and writes `job.json` last. One hypertree URL per job (GET/PUT, 409 once present). No auth, one process.
+
+**The file server keeps every job (2026-11-05).**
+Why: storage is cheap, and every stored job stays available for a rollback or a re-dispatch.
+Cost: disk grows with every job.
 
 ## Packaging
 
@@ -215,7 +233,7 @@ Why: each goes to a different machine, so each must install on its own.
 Cost: nothing checks the two `wire.py` copies match; `agent` and `/opt/agent` are generic names on a shared box.
 
 **Installed by hand, from each project's README; no install scripts (2026-11-04).**
-The steps: virtualenv in the project folder, `pip install -e .`, `.env` from `.env.example`, run the command in the foreground, then copy the unit from `deploy/`.
+The steps: virtualenv in the project folder, `pip install -e .`, `.env` from `.env.example`, run the command in the foreground, then copy the unit from `deploy/`. The owner sets up the virtualenvs and units on every machine himself (2026-11-05), so pip access and the units' user are his to arrange; the units in `deploy/` are a starting point.
 Why: the owner installs each machine himself and wants to see every step. The install is editable so each config finds the `.env` next to its own source.
 
 **Every service is one console script, and systemd runs the same command (2026-11-04).**
@@ -230,4 +248,12 @@ Why: one rule for all three, and a foreground run needs nothing exported.
 The docs live in its `docs/`. A release zip is `git archive` of a commit.
 Why: moves, renames and small edits are cheap in git and expensive as whole-document rewrites in the claude.ai project.
 
-**`rename_term.sh` sits at the top of the repository** and renames an alias in every form across the three projects.
+**`rename_term.sh` is a fixed checklist of placeholders (2026-11-05).**
+Only `hypertree`, `etc_dir` and `program_log` can be renamed: the owner fills in each real name at the top of the script and runs it once, on a fresh copy. Each is renamed in every form across the three projects.
+Why: renaming any term typed on the command line was too loose; the checklist records exactly which names are placeholders.
+
+**`check_wire.sh` compares the two `wire.py` copies (2026-11-05).**
+Run by hand before a release; a difference fails with the diff.
+Why: the copies live in separate projects, so no single install or test sees both.
+
+**Step names are the method names (2026-11-05).** `start` and `stop`; nothing depends on the earlier `spawn_process` and `kill_instance`.

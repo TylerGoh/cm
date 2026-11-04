@@ -44,6 +44,13 @@ def test_step_names_and_settings(tmp_path: Path) -> None:
     assert [s.critical for s in update] == [True, False, False, True, True, False]
     assert update[4].retries == 1
 
+    force_update = plan(OpType.FORCE_UPDATE, DESIRED, process, updates).pipeline.steps
+    assert [s.stage.name for s in force_update] == ["download", "clear_hypertree", "fetch_hypertree"]
+    assert [s.critical for s in force_update] == [True, False, False]
+
+    crash_restart = plan(OpType.CRASH_RESTART, DESIRED, process, updates).pipeline.steps
+    assert "upload_hypertree" not in [s.stage.name for s in crash_restart]
+
     start = plan(OpType.START, DESIRED, process, updates).pipeline.steps
     assert [(s.stage.name, s.retries) for s in start] == [("start", 0), ("wait_for_log", 0)]
 

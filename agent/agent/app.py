@@ -15,7 +15,7 @@ from agent.elastic import ElasticClient
 from agent.feed import ConditionFeed
 from agent.health import HealthMonitor
 from agent.inventory import InventoryExporter
-from agent.metrics import PerformanceMonitor
+from agent.performance import PerformanceMonitor
 from agent.models import AgentMemory, HostInfo, ProcessMemory
 from agent.process import ProcessManager
 from agent.state_store import JsonStore

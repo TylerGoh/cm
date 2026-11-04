@@ -11,7 +11,7 @@ from agent.cluster_manager_client import ClusterManagerClient
 from agent.decide import decide
 from agent.feed import ConditionFeed, Conditions
 from agent.health import HealthMonitor
-from agent.metrics import PerformanceMonitor
+from agent.performance import PerformanceMonitor
 from agent.models import AgentMemory, AgentMemoryChanges, Observed
 from agent.operations import plan
 from agent.pipeline import Pipeline

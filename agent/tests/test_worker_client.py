@@ -50,6 +50,23 @@ def test_metrics_missing_name_is_none():
     assert asyncio.run(client(serve(payloads)).metrics()) is None
 
 
+def test_missing_names_are_logged_once_until_they_come_back(caplog: pytest.LogCaptureFixture):
+    payloads = full_payloads()
+    first = next(iter(payloads.values()))
+    removed = next(iter(first))
+    value = first.pop(removed)
+    c = client(serve(payloads))
+    with caplog.at_level("INFO", logger="agent.worker"):
+        asyncio.run(c.metrics())
+        asyncio.run(c.metrics())
+        assert [r.levelname for r in caplog.records] == ["WARNING"]       # once, not per reading
+        first[removed] = value
+        asyncio.run(c.metrics())
+        del first[removed]
+        asyncio.run(c.metrics())
+    assert [r.levelname for r in caplog.records] == ["WARNING", "INFO", "WARNING"]
+
+
 def test_metrics_one_failing_endpoint_is_none():
     payloads = full_payloads()
     del payloads[next(iter(payloads))]                  # that path now answers 404

@@ -19,10 +19,10 @@ agent/
   pipeline.py      generic engine; Stage.from_callable and Guard.from_callable derive from signatures (imports nothing from the agent)
   process.py       ProcessManager: owns ProcessStatus; spawns, waits for, stops and reattaches to the worker (no pipeline import)
   updates.py       UpdateManager: bundles and links, hypertrees, reload, verify (no pipeline import)
-  worker_client.py the only code that sends requests to the worker; WorkerMetrics contract
+  worker_client.py the only code that sends requests to the worker; the generated worker contract block
   feed.py          Conditions, ConditionFeed
   health.py        HealthMonitor (own loop)
-  metrics.py       PerformanceMonitor (own loop): failed-request ratio over a sliding window
+  performance.py   PerformanceMonitor (own loop): failed-request ratio over a sliding window
   inventory.py     InventoryExporter (own loop): host record to Elastic
   elastic.py       ElasticClient: data documents only, two indexes, awaited directly, best effort
   models.py        agent-internal runtime and persisted models, HostInfo
@@ -31,9 +31,11 @@ agent/
   state_store.py   JsonStore[T] with atomic save
 tests/
   test_models.py         AgentMemoryChanges mirrors AgentMemory's fields
-  test_metrics.py        judge, full window, counter reset, gate reset, metrics_available, settings
-  test_worker_client.py  metrics all-or-nothing, queries return None, health on the version endpoint, reload phases
-  test_operations.py     every OpType: plan builds, context covers initial_requires; step names and settings
+  test_performance.py    judge, full window, counter reset, gate reset, metrics_available, settings
+  test_worker_client.py  metrics all-or-nothing, missing names logged once, queries return None, health on the
+                         version endpoint, reload phases
+  test_operations.py     every OpType: plan builds, context covers initial_requires; step names and settings,
+                         FORCE_UPDATE's hypertree steps, no upload in CRASH_RESTART
   test_process.py        real processes: start/wait_for_log/stop, old ready lines ignored, early exit, hang,
                          reattach (dead pid, live start), transition table
   test_updates.py        bundles and links, defaults kept, sha256 refusal, reload phases, verify, hypertree round trip
@@ -49,13 +51,13 @@ Not written yet: `tests/test_decide.py`, `tests/test_pipeline.py` and `tests/int
 
 The GitHub repository `TylerGoh/cm` holds the three projects and is the source of truth for code. Its `docs/` folder holds this file, `decisions.md` and `open-items.md`. Every package folder has an empty `__init__.py`.
 
-`docs/metrics-draft.md` holds the parked first draft of performance judging. It is superseded by `metrics.py` and is not live code.
+`docs/metrics-draft.md` holds the parked first draft of performance judging. It is superseded by `performance.py` and is not live code.
 
 Import direction:
 
 ```
 wire → models, pipeline, state_store → worker_client, elastic → process, updates, feed
-  → decide, operations, health, metrics, inventory → supervisor → app → __main__
+  → decide, operations, health, performance, inventory → supervisor → app → __main__
 ```
 
 `config.py` is imported only by `app.py` and `__main__.py`; every other module receives values.
@@ -70,7 +72,7 @@ wire → models, pipeline, state_store → worker_client, elastic → process, u
 - Operations restart from scratch: no resuming, every step is idempotent, and an interrupted operation is discarded. The agent's memory is persisted only to survive deliberate restarts.
 - The agent never rolls back on its own. The cluster manager rolls back by changing the desired state.
 - Installing the worker binary is outside the agent's scope. The binary is installed with a default install, so there is always something to run. The default install keeps its configuration as real folders and files under `etc_dir`. The agent manages only what the worker loads: `download` unpacks a version's zip into its own bundle folder and points a configured table of per-file symlinks under `etc_dir` into it, and `start` spawns the worker, which loads whatever the links and the default install's files hold. The agent only ever creates and replaces links; it never moves or deletes a real file. The only version the agent knows is `running_version`, the one the live worker reports. ("Signature version" is the informal name for the same thing; the code always says `running_version`.)
-- Artifacts always come from the internal file server: every `artifact_url` in the desired state points there (see "Cluster manager daemon and client"). So does each version's hypertree, a folder the worker generates while loading a version that makes later loads of it faster; UPDATE clears, fetches and uploads it as best-effort steps (see operations.py).
+- Artifacts always come from the internal file server: every `artifact_url` in the desired state points there (see "Cluster manager daemon and client"). So does each version's hypertree, a folder the worker generates while loading a version that makes later loads of it faster; UPDATE clears, fetches and uploads it, and FORCE_UPDATE clears and fetches it, as best-effort steps (see operations.py).
 - `restart_generation` and `force_update_generation` are per-agent counters. The agent acts when the desired value is higher than the one it last handled, and both sides start at 0.
 - CRASHED means the worker has failed: either its pid is gone, or it's alive but hung (it failed `max_failures` liveness checks in a row). Both go through the same crash path.
 - The worker outlives an agent restart. The agent's systemd unit has `KillMode=process`, so stopping the agent doesn't kill the worker it spawned. REATTACH relies on this.
@@ -135,7 +137,7 @@ Code: `agent/models.py` (`HostInfo`, `Observed`, `AgentMemory`, `AgentMemoryChan
 
 ## state_store.py
 
-Code: `agent/state_store.py`. `JsonStore[T: BaseModel]` holds no value; the file is the only copy. `load()` raises `FileNotFoundError` or `ValidationError`, and `save()` is atomic: temp file, fsync, then `os.replace`. It doesn't create the file's folder; that is part of installing the agent. Two stores, each failing differently:
+Code: `agent/state_store.py`. `JsonStore[T: BaseModel]` holds no value; the file is the only copy. `load()` raises `FileNotFoundError` or `ValidationError`, and `save()` is atomic: temp file, fsync, `os.replace`, then an fsync of the folder so the rename itself survives a power loss. It doesn't create the file's folder; that is part of installing the agent. Two stores, each failing differently:
 
 - `AgentMemory`: a missing file means first boot, so build it explicitly and save: generation and both handled counters at 0, no failed generation, `crash_restarted=False`. A corrupt file fails startup on purpose. The supervisor loads it in `__init__` and keeps the in-memory copy (`memory`); `_set_memory` is the only writer, and it saves before updating memory.
 - `ProcessMemory`: a missing file is first boot, written as `ProcessMemory(pid=None, create_time=None, state=STOPPED)`. `ProcessManager` reads the file on each use, so a derived status is never based on a stale in-memory copy.
@@ -171,7 +173,7 @@ Code: `agent/pipeline.py` (`Stage` with `from_callable`, `Guard` with `from_call
 
 Code: `agent/process.py`, `agent/updates.py`. Plain attributes, properties and plain methods, no pipeline import. A property is used only when it computes something; a value that would only be returned as-is is a plain attribute.
 
-Both managers are written out in the project. Step names come from method names, so the cluster manager sees `start` and `stop` in `StepView` (the earlier, private implementation used `spawn_process` and `kill_instance`).
+Both managers are written out in the project. Step names come from method names, so the cluster manager sees `start` and `stop` in `StepView`. Nothing depends on the earlier, private names (`spawn_process`, `kill_instance`).
 
 ### ProcessManager
 
@@ -265,18 +267,18 @@ Stages are built with `Stage.from_callable` from the manager methods (see pipeli
 |---|---|---|---|
 | REATTACH | reattach, wait_for_version (when, retries=0), stop (when) | – | {} |
 | UPDATE | download, clear_hypertree (critical=False), fetch_hypertree (critical=False), reload, verify (retries=1), upload_hypertree (critical=False) | – | artifact, hypertree_get_url, hypertree_upload_url |
-| FORCE_UPDATE | download | – | artifact |
+| FORCE_UPDATE | download, clear_hypertree (critical=False), fetch_hypertree (critical=False) | – | artifact, hypertree_get_url |
 | START | start (retries=0), wait_for_log (retries=0) | – | {} |
 | CRASH_RESTART | stop, start (retries=0), wait_for_log (retries=0) | – | {} |
 | RESTART | stop, start (retries=0), wait_for_log (retries=0) | – | {} |
 | STOP | stop | – | {} |
 
 - `start`, `wait_for_log` and `wait_for_version` never retry. Repeating a spawn could start a second worker, and the waits kill the process when they time out, so a retry could only wait out `start_timeout` again on a dead pid. Other steps keep the default (3), except UPDATE's `verify` (1).
-- `artifact` is `artifact_url`, `artifact_sha256` and `version` from `desired`. `hypertree_get_url` and `hypertree_upload_url` also come from `desired`. Within a recipe, `start` produces `log_offset` for `wait_for_log`, and `reattach` produces `reattach_plan` for the REATTACH guards; nothing else is passed between steps. `download`, UPDATE's `verify` and both hypertree steps read `version`.
-- The hypertree steps only make loading faster, so they are non-critical: a failure stays in its `StepView`, never sets `failure` or `failed_generation`, and the update goes on. `clear_hypertree` and `fetch_hypertree` run before `reload` so the worker loads with only the fetched hypertree (or none) in place; `upload_hypertree` runs last, after `verify` has confirmed the worker loaded the version. A failed clear makes the upload refuse (more than one folder). Only UPDATE handles hypertrees for now.
+- `artifact` is `artifact_url`, `artifact_sha256` and `version` from `desired`. `hypertree_get_url` and `hypertree_upload_url` also come from `desired`. Within a recipe, `start` produces `log_offset` for `wait_for_log`, and `reattach` produces `reattach_plan` for the REATTACH guards; nothing else is passed between steps. `download`, UPDATE's `verify` and the hypertree steps read `version`.
+- The hypertree steps only make loading faster, so they are non-critical: a failure stays in its `StepView`, never sets `failure` or `failed_generation`, and the update goes on. `clear_hypertree` and `fetch_hypertree` run before `reload` so the worker loads with only the fetched hypertree (or none) in place; `upload_hypertree` runs last, after `verify` has confirmed the worker loaded the version. A failed clear makes the upload refuse (more than one folder). FORCE_UPDATE clears and fetches the hypertree too, so the CRASH_RESTART that loads the new bundle next starts from the stored hypertree. Nothing uploads a hypertree after a CRASH_RESTART: it would only speed up later loads, which isn't worth risking a recovery for.
 - Conditional steps use `when=Guard`. Guards are module-level functions in `operations.py`, turned into `Guard`s with `Guard.from_callable`. `plan()` never branches on runtime state: it is built from `desired` alone, and anything only known at run time (such as what `reattach` found) goes through a produced context key read by a guard.
 - `Plan.context` is a `Mapping[str, object]`, not a `dict`, so the context dicts type-check.
-- FORCE_UPDATE only runs when the worker is CRASHED. The worker stays CRASHED (or, if it was hung, stays alive until health fails again), the crash budget is wiped, and a later tick does a CRASH_RESTART, which loads the newly linked bundle.
+- FORCE_UPDATE only runs when the worker is CRASHED. The worker stays CRASHED (or, if it was hung, stays alive until health fails again), the crash budget is wiped, and a later tick does a CRASH_RESTART, which loads the newly linked bundle with the fetched hypertree, if the file server had one.
 - CRASH_RESTART has the same steps as RESTART. It differs only in when `decide` picks it (CRASHED rather than a restart bump) and in using the crash budget. Its `stop` matters because CRASHED includes a live, hung worker; `stop` is a no-op when the pid is already gone. There is no `crash_evidence` step for now, so nothing captures a hung worker's state before the kill. If it comes back, it goes first and non-critical, so it can read the live process and its failure can't block the restart.
 - START, CRASH_RESTART and RESTART spawn the worker, which loads whatever is linked plus the default install's files, not necessarily the desired version, and runs whatever version that is.
 - Only UPDATE verifies the version. START, CRASH_RESTART and RESTART end with `wait_for_log`, their only check: they succeed once the worker logs that it is ready. A timeout kills the process and fails the operation, and the dead pid in STARTING then derives CRASHED. `decide` handles CRASHED before it checks `failed_generation`, so a failed START or RESTART is followed by one CRASH_RESTART if budget is left, and a failed CRASH_RESTART ends in CRASHED_HOLD. A running version that differs from `desired.version` becomes an UPDATE on a later tick through `decide`. A worker that starts but stops answering its version endpoint is caught afterwards by the health monitor as hung, and goes through the crash path.
@@ -309,7 +311,7 @@ Every state change in `tick` is synchronous (`_set_memory`, `_start_operation`, 
 
 ## Monitoring
 
-Metrics, performance and getting data into Elastic are separate concerns. Metrics are the raw readings (`worker_client.py`). Performance is the agent's judgement over them (`metrics.py`). What a metrics document in Elastic contains is not decided.
+Metrics, performance and getting data into Elastic are separate concerns. Metrics are the raw readings (`worker_client.py`). Performance is the agent's judgement over them (`performance.py`). What a metrics document in Elastic contains is not decided.
 
 Health is read directly: the worker's version endpoint is the cheapest ping, and answering it is the liveness check (the process is answering), so a dependency outage doesn't fail it. The worker only stops answering while doing blocking IO during an operation the agent drives, never on its own. Performance is inferred: the agent judges from raw numbers against its own thresholds. That's why `healthy` and `violations` are separate report fields.
 
@@ -339,28 +341,29 @@ Code: `agent/health.py` (`HealthMonitor`). `HealthMonitor(worker, feed, *, inter
 
 Code: `agent/worker_client.py` (`MetricSource`, `MetricType`, `WorkerMetrics`, `METRIC_SOURCES`, `COUNTER_FIELDS`, `GAUGE_FIELDS`, `WorkerClient`). The endpoint paths and metric names are mock until the real worker's are known.
 
-- The whole worker contract is constants at the top of the file: `COUNTERS_ENDPOINT`, `VERSION_PATH` (`/show_version`), `RELOAD_PHASE1_PATH`, `RELOAD_PHASE2_PATH`, plus the `WorkerMetrics` fields. Replacing the mock contract touches only these.
+- The whole worker contract is one block between `# --- BEGIN worker contract` and `# --- END worker contract ---`: `VERSION_PATH` (`/show_version`), `RELOAD_PHASE1_PATH`, `RELOAD_PHASE2_PATH`, one `MetricSource` constant per metric endpoint (`COUNTERS_ENDPOINT`), and `WorkerMetrics`. It is generated by `tools/metrics_generator` from a YAML description of the worker and pasted over whole; nothing else in the file changes when the contract does (see "Packaging and deployment").
 - `WorkerMetrics` has three cumulative counters, all on `/counters` (mock names): `requests_out_total` (sent out), `requests_old_failed_total` (failed because too old) and `requests_out_lagged_total` (failed because lagged). There are no gauges.
 - Queries never raise: `version()`, `health()` and `metrics()` return `None` on failure. `version()` and `health()` use the same endpoint: `version()` reads its `version` field, and `health()` returns `True` when it answered with success, `False` when it answered with an error, and `None` when it didn't answer. Cancellation always propagates.
-- `reload_phase1()` and `reload_phase2()` are GETs with no body, and raise, because a step uses them. An HTTP error becomes a `RuntimeError` carrying the path, the status and the first 200 characters of the body, since the step record keeps only the error string. A network failure or timeout propagates as the `httpx` exception. Phase 1 is assumed to return only once phase 2 can be called.
+- `reload_phase1()` and `reload_phase2()` are GETs with no body, and raise, because a step uses them. Each is synchronous on the worker: it blocks until that phase is done, so a success means the phase worked and there is nothing to wait for afterwards (confirmed by the owner). An HTTP error becomes a `RuntimeError` carrying the path, the status and the first 200 characters of the body, since the step record keeps only the error string. A network failure or timeout propagates as the `httpx` exception.
 - The constructor is `WorkerClient(base_url, *, timeout, reload_timeout, transport)`. Each reload phase uses its own, longer `reload_timeout`; every other call uses `timeout`. `transport` is for tests (`httpx.MockTransport`).
 - One `WorkerClient` is built in the lifespan and passed directly to `ProcessManager`, `UpdateManager`, `HealthMonitor`, `PerformanceMonitor` and the `Supervisor`, sharing one connection pool.
 - Every `WorkerMetrics` field declares three things: a `MetricType` (`COUNTER` or `GAUGE`), a `MetricSource` (its endpoint), and its name at that endpoint (`validation_alias`, a real Pydantic parameter). `MetricType` and `MetricSource` are plain metadata that Pydantic ignores.
 - `_derive()` runs at import. It builds `METRIC_SOURCES` (endpoint → names at that endpoint), `COUNTER_FIELDS` and `GAUGE_FIELDS` (agent-side field names), and raises `TypeError` if a field lacks a `MetricSource`, a `MetricType` or a string alias, or if an alias is used twice.
-- `WorkerMetrics` describes the worker only. What the agent does with the readings is decided in `metrics.py`, not here.
+- An endpoint may serve both counters and gauges; each field declares its own type.
+- `WorkerMetrics` describes the worker only. What the agent does with the readings is decided in `performance.py`, not here.
 
 How `metrics()` works:
 - It fetches every endpoint in `METRIC_SOURCES` concurrently with `gather(..., return_exceptions=True)`. It's all or nothing, so one reading describes one instant.
-- It copies only the declared source names from each endpoint's payload. If any are missing, it logs the endpoint and the names, and returns `None`.
+- It copies only the declared source names from each endpoint's payload. If any are missing, it returns `None`, and logs the endpoint and the names once: not again until a reading has every name, which it logs too.
 - `WorkerMetrics.model_validate(values)` renames the dotted names to field names through the aliases.
 - A network failure returns `None` silently; a validation failure logs and returns `None`.
 - Downstream, the reading is flat and dot-free, so it exports cleanly.
 
-### metrics.py: PerformanceMonitor
+### performance.py: PerformanceMonitor
 
-Code: `agent/metrics.py` (`MetricsReading`, `failed_requests`, `intake_requests`, `counter_reset`, `judge`, `PerformanceMonitor`). `PerformanceMonitor(worker, feed, *, interval, window_seconds, max_failed_ratio, max_failures)`, all from `config`; the constructor raises unless `0 < interval < window_seconds`, `0 < max_failed_ratio < 1` and `max_failures >= 1`.
+Code: `agent/performance.py` (`MetricsReading`, `failed_requests`, `intake_requests`, `counter_reset`, `judge`, `PerformanceMonitor`). `PerformanceMonitor(worker, feed, *, interval, window_seconds, max_failed_ratio, max_failures)`, all from `config`; the constructor raises unless `0 < interval < window_seconds`, `0 < max_failed_ratio < 1` and `max_failures >= 1`.
 
-One check only, deliberately simple:
+The judgement (`judge` and the helpers it reads fields through) is the owner's to code against the real `WorkerMetrics`; `tools/metrics_generator/README.md` has the pattern. The window, the gate and `metrics_available` don't depend on the fields. Today's check, deliberately simple:
 - `failed = old_failed + out_lagged`, and `intake = out + failed`: everything that came in, whether it went out or not.
 - Over the last `window_seconds` (5 minutes), the version is bad when `failed / intake` is above `max_failed_ratio` (30%). Exactly 30% is ok. A window with no intake is ok, since nothing failed.
 - The counters are cumulative, so the amount over the window is the newest reading minus the oldest. Missed readings inside the window don't matter, and there are no bins.
@@ -444,34 +447,37 @@ The file reads and fsyncs in `JsonStore` and `ProcessManager.derive_status` bloc
 
 ## Packaging and deployment
 
-Code: each project's `pyproject.toml`, `.gitignore`, `.env.example`, `README.md` and `deploy/`; `README.md` and `rename_term.sh` at the top of the repository.
+Code: each project's `pyproject.toml`, `.gitignore`, `.env.example`, `README.md` and `deploy/`; `README.md`, `rename_term.sh`, `check_wire.sh` and `tools/metrics_generator/` at the top of the repository.
 
 The repository holds three separate projects, one per service. Each is installed and deployed on its own, with its own dependencies, virtualenv, settings file and systemd unit:
 
 ```
 README.md            the whole flow: release, rename, settings, copy, install by hand
-rename_term.sh       works across all three projects
+rename_term.sh       renames the placeholder names (a fixed checklist) across all three projects
+check_wire.sh        checks the two wire.py copies are identical
+tools/metrics_generator/   YAML description of the worker -> the worker contract block to paste
 docs/                architecture.md, decisions.md, open-items.md, metrics-draft.md
 agent/               distribution "agent": the `agent` command
   README.md  .gitignore  .env.example  pyproject.toml  config.py  agent/  tests/  deploy/agent.service
 cluster-manager/     distribution "cluster-manager": the `cm` command, including `cm daemon`
-  README.md  .gitignore  .env.example  pyproject.toml  cluster_manager/  deploy/cluster-manager.service
+  README.md  .gitignore  .env.example  pyproject.toml  cluster_manager/  tests/  deploy/cluster-manager.service
 file-server/         distribution "file-server": the `file-server` command
   README.md  .gitignore  .env.example  pyproject.toml  file_server/  deploy/file-server.service
 ```
 
-- No project imports from another, and every module path inside a project is unchanged. The contracts between them are `wire.py`, kept as two identical copies (`agent/agent/wire.py` and `cluster-manager/cluster_manager/daemon/wire.py`), and the file server's HTTP API, which only `clients/file_server.py` in the daemon and the agent's `UpdateManager` know.
+- No project imports from another, and every module path inside a project is unchanged. The contracts between them are `wire.py`, kept as two identical copies (`agent/agent/wire.py` and `cluster-manager/cluster_manager/daemon/wire.py`), and the file server's HTTP API, which only `clients/file_server.py` in the daemon and the agent's `UpdateManager` know. `check_wire.sh` compares the two copies and fails, showing the diff, when they differ; run it before every release.
 - Each service is one console script, run in the foreground from its virtualenv, and its systemd unit runs the same command: `agent` (`agent.__main__:main`), `cm daemon` (`cm` is `cluster_manager.client.cli:app`), and `file-server` (`file_server.file_server:main`). Each runs uvicorn with the app object, so each is one process.
 - Every service reads its settings only from `.env` in its own project folder, with the same rules: the process environment is ignored, no defaults, unknown keys rejected. `.env.example` lists every key with example values and is committed; `.env` is ignored by git.
-- Each project is installed by hand, following its README: a virtualenv in the project folder, `pip install -e .`, `.env` from `.env.example`, the command in the foreground, then the unit from `deploy/`. The install is editable on purpose: each config finds its `.env` from its own source file's location, so the source must stay in the project folder rather than be copied into site-packages. There are no install scripts.
-- Dependencies. `agent`: fastapi, uvicorn, httpx, pydantic, pydantic-settings, psutil; `config.py` is a top-level module. `cluster-manager`: fastapi, uvicorn, httpx, pydantic, pydantic-settings, `sqlalchemy[asyncio]` (async mode needs greenlet), aiosqlite, apscheduler 3.x, typer and rich. `file-server`: fastapi, uvicorn, httpx, pydantic, pydantic-settings. pytest is a `dev` extra in the agent and the cluster manager.
+- Each project is installed by hand, following its README: a virtualenv in the project folder, `pip install -e .`, `.env` from `.env.example`, the command in the foreground, then the unit from `deploy/`. The owner sets up the virtualenvs and units on every machine himself, so the units in `deploy/` are a starting point, not a contract. The install is editable on purpose: each config finds its `.env` from its own source file's location, so the source must stay in the project folder rather than be copied into site-packages. There are no install scripts.
+- Dependencies. `agent`: fastapi, uvicorn, httpx, pydantic, pydantic-settings, psutil; `config.py` is a top-level module. `cluster-manager`: fastapi, uvicorn, httpx, pydantic, pydantic-settings, `sqlalchemy[asyncio]` (async mode needs greenlet), aiosqlite, apscheduler 3.x, typer and rich. `file-server`: fastapi, uvicorn, httpx, pydantic, pydantic-settings. pytest is a `dev` extra in the agent and the cluster manager. The cluster manager's `tests/` holds the canary judgement's tests, which need no `.env`.
 - Each `.gitignore` covers Python caches, build output and virtualenvs, plus `.env`, and in the cluster manager the SQLite files (`*.db`, `*.db-wal`, `*.db-shm`).
 - The units expect each project at `/opt/<folder>`: `/opt/agent`, `/opt/cluster-manager` and `/opt/file-server` (`WorkingDirectory` and `ExecStart`).
 - `deploy/agent.service`: `KillMode=process` (the worker outlives the agent), `TimeoutStopSec=40` (open connections 5s, the tick in progress up to the 5s heartbeat, and the ~20s operation grace), `PrivateTmp=no` (console logs are in `/tmp`), `Restart=always`.
 - `deploy/cluster-manager.service` and `deploy/file-server.service`: one process each.
 - First install order: the file server, then the cluster manager (its first boot fetches the bootstrap version through the file server), then the agents.
 - A release is the repository at a commit (`git archive`). The flow: unzip, rename aliases with `rename_term.sh`, fill in each `.env`, copy each project folder to its machine, install by hand.
-- `rename_term.sh [--dry-run] OLD NEW` renames a snake_case term everywhere in the tree, in every form (`program_log`, `PROGRAM_LOG`, `ProgramLog`, `program log`, `Program log`), inside text files and in file and folder names, in one pass per file. It sits at the top of the repository and runs over all three projects. It exists for names that are aliases for the owner's real ones, such as `program_log` and `hypertree`: renaming `hypertree` changes the wire fields, the file server's routes and its stored file name together, so the agent, the daemon and the file server are deployed together, and files already stored under the old name are renamed by hand. It skips `.git`, virtualenvs, caches, binary files and itself.
+- `rename_term.sh [--dry-run]` renames the placeholder names to the owner's real ones. Only the names in its checklist (`CHECKLIST` at the top of the script) can be renamed: `hypertree`, `etc_dir` and `program_log`. The owner fills in each real name there; an empty one is skipped, and a real name must be snake_case and can't be another placeholder. Each name is renamed in every form (`program_log`, `PROGRAM_LOG`, `ProgramLog`, `program log`, `Program log`), inside text files and in file and folder names, across all three projects. Renaming `hypertree` changes the wire fields, the file server's routes and its stored file name together, so all three services are reinstalled together, and files already stored under the old name are renamed by hand. It skips `.git`, virtualenvs, caches, binary files and itself, so its checklist keeps the placeholders.
+- `tools/metrics_generator/generate.py worker.yaml` reads a YAML description of the worker (the version and reload paths, and each metric endpoint with its metrics: name at the endpoint, field name, counter or gauge) and writes `generated_worker_contract.py` in its own folder, to paste over the worker contract block in `agent/agent/worker_client.py`. The YAML is validated with Pydantic, and duplicate fields or names are refused, naming the entry. It doesn't generate the performance judgement; its README has a sample to follow.
 
 ## Cluster manager daemon and client
 
@@ -515,7 +521,7 @@ Rules:
 - Artifacts are zips, since agents unzip them into bundles. Before an artifact is stored, the server checks that it opens as a zip and that every member passes its CRC check (`zipfile.is_zipfile` and `ZipFile.testzip()`), so a truncated or non-zip download from upstream never becomes a job. Hypertrees aren't checked.
 - Every file is written to a `.tmp` name, fsynced, then renamed into place, and `job.json` is written last. A crash part-way leaves no job that anyone is served, and the next fetch starts it again.
 - A fetch and a hypertree upload hold the job's lock, so two concurrent fetches of one job fetch once, and only one upload wins.
-- Nothing is ever deleted.
+- Nothing is ever deleted: the owner keeps every job, since storage is cheap.
 - Settings come only from `.env` in the `file-server` project folder (`FileServerConfig`), with the same rules as the other services: the process environment is ignored, no defaults, no unknown keys. `FILE_SERVER_ROOT`, `FILE_SERVER_UPSTREAM_TIMEOUT` (seconds) and `FILE_SERVER_PORT`.
 - `main()` is the `file-server` command. It runs uvicorn with the app object on `0.0.0.0` and `FILE_SERVER_PORT`, so there is always exactly one process.
 - File writes are synchronous inside async handlers, so they block the event loop for each chunk; with two callers that is accepted.
@@ -579,6 +585,7 @@ Judging, at the deadline (`services/versions.judge_canary`):
   6. PASSED.
 - Only the state at the deadline counts. A worker that crashed earlier and is RUNNING the target version at the deadline is fine.
 - Outcomes are counted in buckets, each with its own limit, all counts from `config`: crash (FAULTY_UPDATE and CRASHED) against `canary_max_crashes`, the lowest; PERFORMANCE against `canary_max_violations`; NOT_CONVERGED against `canary_max_not_converged`. NO_VERDICT and PASSED count in no bucket. The limits are fixed thresholds; the canary isn't compared with the ACTIVE fleet.
+- A canary where no agent converged is always rejected, whatever the limits: converged means NO_VERDICT, PERFORMANCE or PASSED (running the canary version). That includes a canary whose agents were all decommissioned before the deadline: with no outcomes, passing it would promote the version on no evidence. The example settings put `canary_max_not_converged` at 0, so any canary agent not running the new version at the deadline rejects it.
 - Any bucket over its limit rejects the canary: VERIFYING → UNSTABLE with `unstable_reason` holding the count per outcome, and the canary agents go back to the ACTIVE version.
 - Otherwise the version is promoted automatically: the old ACTIVE → STABLE (flushed first), VERIFYING → ACTIVE with `verified_at` set and `activated_by_rollback=false`, and every live agent not already on the new version points at it, in one transaction.
 - A converged agent is NO_VERDICT until its performance monitor has a full window (5 minutes of RUNNING with no operation), so `canary_duration` must be comfortably longer than the update plus one window, or every canary agent is NO_VERDICT.
@@ -706,7 +713,7 @@ Per model:
 - A worker that died while the agent was down is reported as `stopped`, not `crashed`, and the agent starts it again (START) if `desired_running`. That includes a worker in CRASHED_HOLD when the agent restarts; the START doesn't reset its crash budget, so another crash goes straight to `crashed_hold`. To keep a worker down after stopping it by hand, set `desired_running=false`.
 - Bump the force counter only when `process_status == CRASHED`. A bump while RUNNING stays pending until the next crash.
 - Roll back a running worker with a normal UPDATE, and a crashed or hung one with a force bump.
-- A failed `clear_hypertree`, `fetch_hypertree` or `upload_hypertree` step in an UPDATE's step log is not a failed update: those steps are non-critical, and the update's outcome is `failure` alone.
+- A failed `clear_hypertree`, `fetch_hypertree` or `upload_hypertree` step in an UPDATE's or FORCE_UPDATE's step log is not a failed update: those steps are non-critical, and the update's outcome is `failure` alone.
 - `healthy` and `violations` are separate signals. A health dip while BUSY is expected and isn't counted. `violations=None` means no verdict yet: for the first window after an update, a restart or any operation, and while metrics are unavailable. Only whether `violations` is `None`, empty or non-empty matters; its messages are for humans and are never parsed.
 - `healthy=False` means `max_failures` failed checks in a row, including a worker that stopped answering, and the same report then shows the worker as CRASHED. `healthy=None` means no data yet, including while an operation runs and right after an agent restart. A `restart_generation` bump doesn't apply to a hung worker, since RESTART only runs from RUNNING.
 - Only the cluster manager alerts. The agent reports state in the heartbeat and never notifies anyone itself.

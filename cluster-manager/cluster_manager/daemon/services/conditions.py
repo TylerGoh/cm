@@ -56,9 +56,17 @@ def count_outcomes(outcomes: Iterable[CanaryOutcome]) -> dict[CanaryOutcome, int
     return {outcome: counted[outcome] for outcome in CanaryOutcome}
 
 
+# Outcomes of an agent running the canary version: it converged, whatever its performance.
+CONVERGED_OUTCOMES = (CanaryOutcome.NO_VERDICT, CanaryOutcome.PERFORMANCE, CanaryOutcome.PASSED)
+
+
 def canary_rejected(counts: dict[CanaryOutcome, int], limits: CanaryLimits) -> bool:
-    """Any bucket over its limit rejects. NO_VERDICT and PASSED count in no bucket."""
+    """Any bucket over its limit rejects. NO_VERDICT and PASSED count in no bucket.
+    A canary where no agent converged also rejects, whatever the limits say, including one with
+    no agents left: passing it would promote the version on no evidence."""
+    converged = sum(counts[outcome] for outcome in CONVERGED_OUTCOMES)
     crashes = counts[CanaryOutcome.FAULTY_UPDATE] + counts[CanaryOutcome.CRASHED]
-    return (crashes > limits.max_crashes
+    return (converged == 0
+            or crashes > limits.max_crashes
             or counts[CanaryOutcome.PERFORMANCE] > limits.max_violations
             or counts[CanaryOutcome.NOT_CONVERGED] > limits.max_not_converged)
