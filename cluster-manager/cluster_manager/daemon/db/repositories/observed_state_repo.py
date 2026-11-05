@@ -20,7 +20,7 @@ class ObservedStateRepo:
 
     async def silent_ips(self, now: datetime, threshold: timedelta) -> list[str]:
         """Live agents last heard from before `now - threshold`. The cutoff is computed here,
-        not in SQL: SQLite has no interval arithmetic."""
+        not in SQL, so every timestamp comes from the daemon's clock."""
         cutoff = now - threshold
         result = await self._session.execute(
             select(ObservedState.ip)

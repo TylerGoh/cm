@@ -32,7 +32,7 @@ class DaemonConfig(BaseSettings):
     log_format: str
 
     # database
-    database_url: str                    # sqlite+aiosqlite:////path/to/cluster_manager.db
+    database_url: str                    # postgresql+asyncpg://user:password@host:5432/database
 
     # file server
     file_server_url: str

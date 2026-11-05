@@ -1,15 +1,14 @@
-"""The engine, the session factory and schema creation. SQLite through aiosqlite.
+"""The engine, the session factory and schema creation. PostgreSQL through asyncpg.
 
-Every connection turns on foreign keys (SQLite leaves them off otherwise, so every ForeignKey in
-the models would go unenforced) and WAL mode (readers don't block the one writer)."""
+Transactions are READ COMMITTED (the default): a write to a row another transaction has changed
+waits for it to commit, and the unique indexes hold the invariants (one ACTIVE, one VERIFYING,
+one open incident per agent and kind). SERIALIZABLE was tried and fails concurrent heartbeats
+from different agents. pool_pre_ping replaces a connection the server dropped (a database
+restart) before it is used."""
 
-import sqlite3
 from collections.abc import AsyncIterator
 
-from sqlalchemy import event
-from sqlalchemy.engine.interfaces import DBAPIConnection
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import ConnectionPoolEntry
 
 from cluster_manager.daemon.config import config
 from cluster_manager.daemon.db.base import Base
@@ -17,28 +16,13 @@ from cluster_manager.daemon.db.models import (  # noqa: F401  (imported so creat
     agent, desired_state, incident, observed_state, operation, version_deployment,
 )
 
-MIN_SQLITE = (3, 35, 0)             # RETURNING
-
-engine = create_async_engine(config.database_url)
+engine = create_async_engine(config.database_url, pool_pre_ping=True)
 session_factory = async_sessionmaker(engine, expire_on_commit=False)
-
-
-@event.listens_for(engine.sync_engine, "connect")
-def _on_connect(dbapi_connection: DBAPIConnection, connection_record: ConnectionPoolEntry) -> None:
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.execute("PRAGMA journal_mode=WAL")
-    cursor.close()
-
-
-def check_sqlite_version() -> None:
-    if sqlite3.sqlite_version_info < MIN_SQLITE:
-        raise RuntimeError(f"SQLite {sqlite3.sqlite_version} is too old; RETURNING needs 3.35 or later")
 
 
 async def create_schema() -> None:
     """Creates missing tables. While the data can still be wiped there are no migrations: a
-    changed model means dropping the database file."""
+    changed model means wiping the database (see the README)."""
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 

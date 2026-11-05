@@ -7,17 +7,32 @@ Mattermost. One per cluster.
 ## What the box needs
 
 - Python 3.12 with `venv`, and a pip index (PyPI, or `PIP_INDEX_URL`).
+- Podman with Quadlet (podman 4.4 or later) and the Bitnami PostgreSQL image, for the database.
 - The file server running and reachable at `FILE_SERVER_URL`. The daemon's first start fetches
   `BOOTSTRAP_VERSION` through it, and fails without it.
 
 ## Install
 
+First the database: PostgreSQL in a podman container, run by systemd. Set `Image=` in
+`deploy/cluster-manager-postgres.container` to the image as `podman images` lists it.
+
 ```bash
 cd /opt/cluster-manager             # this folder, copied to the box
+mkdir -p /etc/cluster-manager
+cp deploy/postgres.env.example /etc/cluster-manager/postgres.env    # fill in the passwords
+chmod 600 /etc/cluster-manager/postgres.env
+cp deploy/cluster-manager-postgres.container /etc/containers/systemd/
+systemctl daemon-reload
+systemctl start cluster-manager-postgres    # enabled at boot by its [Install] section
+podman healthcheck run cluster-manager-postgres && echo ready      # once it's initialised
+```
+
+Then the daemon:
+
+```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -e .          # editable: the daemon's config reads the .env in this folder
-cp .env.example .env                # fill it in
-mkdir -p /var/lib/cluster-manager   # the folder of the DATABASE_URL file
+cp .env.example .env                # fill it in; DATABASE_URL carries the password from postgres.env
 .venv/bin/cm daemon                 # runs the daemon in the foreground; Ctrl-C stops it
 ```
 
@@ -35,7 +50,9 @@ journalctl -u cluster-manager -f
 ln -s /opt/cluster-manager/.venv/bin/cm /usr/local/bin/cm     # cm on the PATH
 ```
 
-The unit runs `cm daemon` and expects this folder at `/opt/cluster-manager`.
+The unit runs `cm daemon`, expects this folder at `/opt/cluster-manager`, and starts after the
+database. If the database isn't accepting connections yet, the daemon fails and systemd restarts it
+5 seconds later.
 
 ## cm
 
@@ -57,10 +74,22 @@ cm --json agents                # global options go before the command
 
 ## Good to know
 
-- **The database** is the SQLite file in `DATABASE_URL`. There are no migrations yet: if an
-  upgrade changes a model, stop the daemon, delete the file and its `-wal` and `-shm` files, and
-  start it again. The first boot seeds `BOOTSTRAP_VERSION` again, and agents re-register on their
-  next heartbeat.
+- **The database** is PostgreSQL in the `cluster-manager-postgres` container, its data in the
+  podman volume `cluster-manager-pgdata`. There are no migrations yet: if an upgrade changes a
+  model, wipe it and start again:
+
+  ```bash
+  systemctl stop cluster-manager cluster-manager-postgres
+  podman volume rm cluster-manager-pgdata
+  systemctl start cluster-manager-postgres cluster-manager
+  ```
+
+  The first boot seeds `BOOTSTRAP_VERSION` again, and agents re-register on their next heartbeat.
+  Set `BOOTSTRAP_VERSION` and `BOOTSTRAP_UPSTREAM_URL` to the version that should be ACTIVE
+  first, or every agent is pointed back at the old bootstrap version.
+- **Moving from SQLite**: nothing is copied over. Treat it as a wipe (above): set the bootstrap
+  keys to the version that's ACTIVE today, then start on PostgreSQL.
+- **A psql shell**: `podman exec -it cluster-manager-postgres psql -U cluster_manager -d cluster_manager`.
 - **`BOOTSTRAP_VERSION` and `BOOTSTRAP_UPSTREAM_URL`** are read on the first boot only.
 - **Mattermost**: with an empty `MATTERMOST_WEBHOOK_URL` nothing is sent. Incidents wait, and go
   out once it is set and the daemon restarted.
@@ -80,5 +109,7 @@ cluster_manager/schemas.py   the cm <-> daemon contract
 cluster_manager/daemon/      the daemon (cm daemon)
 cluster_manager/client/      the cm CLI
 deploy/cluster-manager.service
+deploy/cluster-manager-postgres.container   the database (Quadlet)
+deploy/postgres.env.example                 its settings
 .env.example                 every setting, with example values
 ```

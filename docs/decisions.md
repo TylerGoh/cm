@@ -231,7 +231,7 @@ Cost: a version that fails only slowly, or on fewer agents than the limits, stay
 
 **Non-responding after 3 missed ticks.** Incidents (`non_responding`, `metrics_unavailable`), at most one open per agent and kind. A sender posts openings and recoveries to Mattermost after commit, marking each sent only on success.
 
-**Database:** SQLite, all access through SQLAlchemy, no literal SQL. Enums stored by name. Timestamps are `UtcDateTime` from the daemon's clock. Indexes and constraints are expressions over model attributes. Desired-state changes are one atomic `UPDATE ... RETURNING`; history keyed `(ip, generation)`. Operations recorded once per `(agent_ip, op_id)`. Schema via `create_all`, no migrations while data can be wiped.
+**Database:** PostgreSQL (the Bitnami image under podman, 2026-11-05: the RHEL 8 box's SQLite is too old), `READ COMMITTED`, all access through SQLAlchemy, no literal SQL. Enums stored by name. Timestamps are `UtcDateTime` from the daemon's clock. Indexes and constraints are expressions over model attributes. Desired-state changes are one atomic `UPDATE ... RETURNING`; history keyed `(ip, generation)`. Operations recorded once per `(agent_ip, op_id)`. Schema via `create_all`, no migrations while data can be wiped.
 
 **The CLI is Typer, rendered with Rich (2026-11-04).**
 Each command is a typed function whose docstring is its help, enum options list their choices and are checked before a request is sent, and lists render as tables with only condition, canary outcome and step state coloured. Daemon text is printed with markup off; piped output keeps one row per line; tracebacks hide local variables.

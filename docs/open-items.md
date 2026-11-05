@@ -64,7 +64,7 @@ Clearing, fetching and uploading in UPDATE (2026-11-04 entries) and clearing and
 
 ## Cluster manager database
 
-Every model and repository is written and ported to SQLite (2026-11-02 and 2026-11-04 entries). Still open:
+Every model and repository is written, and runs on PostgreSQL (2026-11-02, 2026-11-04 and 2026-11-05 entries). Still open:
 
 - Whether `DesiredStateRepo.apply` should write the history row itself, so a service can't forget it. Today the service writes it from the returned row.
 - Whether interrupted operations are recorded. `operations` only gets rows from `last_operation`, so an `op_id` seen in `current_operation` that never finishes leaves no row.

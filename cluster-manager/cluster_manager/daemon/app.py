@@ -1,4 +1,4 @@
-"""The daemon: wiring only. Startup checks SQLite, creates the schema, seeds or checks the ACTIVE
+"""The daemon: wiring only. Startup creates the schema, seeds or checks the ACTIVE
 version, reschedules a pending canary judgement, then starts the watcher and the sender."""
 
 import asyncio
@@ -14,7 +14,7 @@ from cluster_manager.daemon.api import agents, fleet, heartbeat, versions as ver
 from cluster_manager.daemon.clients.file_server import FileServerClient
 from cluster_manager.daemon.clients.mattermost import MattermostClient
 from cluster_manager.daemon.config import config
-from cluster_manager.daemon.db.session import check_sqlite_version, create_schema, engine, session_factory
+from cluster_manager.daemon.db.session import create_schema, engine, session_factory
 from cluster_manager.daemon.loops import fleet_watch, sender, watcher
 from cluster_manager.daemon.services import versions
 
@@ -32,7 +32,6 @@ def _log_if_failed(task: asyncio.Task[None]) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- startup ---
-    check_sqlite_version()
     await create_schema()
     file_server = FileServerClient(config.file_server_url, timeout=config.file_server_timeout,
                                    fetch_timeout=config.file_server_fetch_timeout)

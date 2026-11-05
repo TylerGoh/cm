@@ -1,0 +1,32 @@
+# The cluster manager daemon's PostgreSQL, the Bitnami image run by podman as a systemd service
+# (a Quadlet unit). Copy to /etc/containers/systemd/, then:
+#   systemctl daemon-reload && systemctl start cluster-manager-postgres
+# Quadlet generates cluster-manager-postgres.service from this file; [Install] enables it at boot.
+
+[Unit]
+Description=PostgreSQL for the cluster manager daemon
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=cluster-manager-postgres
+# the local tag: podman tag <bitnami image> postgres:18.4 (a local tag gets the localhost/ prefix)
+Image=localhost/postgres:18.4
+# POSTGRESQL_USERNAME, POSTGRESQL_PASSWORD, POSTGRESQL_DATABASE, POSTGRESQL_POSTGRES_PASSWORD
+EnvironmentFile=/etc/cluster-manager/postgres.env
+# a named volume: podman creates it on first start, owned by the image's user (1001)
+Volume=cluster-manager-pgdata:/bitnami/postgresql
+# the daemon runs on this box, so the database listens on loopback only
+PublishPort=127.0.0.1:5432:5432
+HealthCmd=pg_isready -h 127.0.0.1 -p 5432
+HealthInterval=10s
+HealthRetries=5
+HealthStartPeriod=30s
+
+[Service]
+Restart=always
+# the first start pulls nothing (the image is local) but initialises the data folder
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

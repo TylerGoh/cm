@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import select, update
-from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from cluster_manager.daemon.db.models.incident import Incident

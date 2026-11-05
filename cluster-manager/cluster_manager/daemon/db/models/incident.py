@@ -27,7 +27,6 @@ Index(
     Incident.kind,
     unique=True,
     postgresql_where=Incident.closed_at.is_(None),
-    sqlite_where=Incident.closed_at.is_(None),
 )
 
 CheckConstraint(

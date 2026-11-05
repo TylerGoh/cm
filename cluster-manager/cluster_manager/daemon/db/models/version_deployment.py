@@ -29,7 +29,6 @@ Index(
     VersionDeployment.status,
     unique=True,
     postgresql_where=VersionDeployment.status == DeploymentStatus.ACTIVE,
-    sqlite_where=VersionDeployment.status == DeploymentStatus.ACTIVE,
 )
 
 Index(
@@ -37,7 +36,6 @@ Index(
     VersionDeployment.status,
     unique=True,
     postgresql_where=VersionDeployment.status == DeploymentStatus.VERIFYING,
-    sqlite_where=VersionDeployment.status == DeploymentStatus.VERIFYING,
 )
 
 CheckConstraint(
