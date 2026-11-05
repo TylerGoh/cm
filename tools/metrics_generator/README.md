@@ -52,8 +52,10 @@ Each metric has two names:
 
 Every command (`version_command`, the reload commands, each endpoint's `command`) is appended
 as-is to the agent's `WORKER_URL`, which ends where the command name goes (for example
-`http://127.0.0.1:9000/api?command=`). So a command is a bare name: no leading slash, no
-whitespace. The generator refuses one that starts with `/`.
+`http://127.0.0.1:9000/api?command=`). So a command has no leading slash, and the generator
+refuses one that has. A command may contain spaces: write `show bind` (or `show%20bind`, which
+is the same); the agent sends it as `...?command=show%20bind`. Spaces at either end and control
+characters such as tabs are refused.
 
 One endpoint can mix counters and gauges. Every `field` and every `name` must be unique across
 the file. Mistakes are reported with the entry they are in, before anything is written.

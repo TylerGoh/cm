@@ -28,13 +28,17 @@ DOCUMENT_KEYS = frozenset({"at", "running_version", "updating", "host", "ipv4", 
 
 def checked_command(value: str) -> str:
     """A command is appended to WORKER_URL with nothing in between (the base URL ends in something
-    like `?command=`), so it is a bare name: not empty, no leading slash, no whitespace."""
+    like `?command=`). It may contain spaces (`show bind`), which httpx sends as %20, so writing
+    `show bind` or `show%20bind` gives the same URL. Not allowed: empty, a leading slash, spaces at
+    either end (almost always a typo), and control characters such as a newline or a tab."""
     if not value:
         raise ValueError("a command can't be empty")
     if value.startswith("/"):
         raise ValueError(f"{value!r} must not start with /: commands are appended to WORKER_URL as-is")
-    if any(character.isspace() for character in value):
-        raise ValueError(f"{value!r} must not contain whitespace")
+    if value != value.strip():
+        raise ValueError(f"{value!r} starts or ends with a space")
+    if any(not character.isprintable() for character in value):
+        raise ValueError(f"{value!r} contains a control character (a newline or a tab, say)")
     return value
 
 
