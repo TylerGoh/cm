@@ -2,3 +2,4 @@
 generated_*.py
 # your own contract file, if you keep it next to the example
 worker.yaml
+__pycache__/
