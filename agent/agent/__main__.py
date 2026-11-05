@@ -1,4 +1,5 @@
 import logging
+import time
 
 import uvicorn
 
@@ -11,6 +12,7 @@ def main() -> None:
     """The `agent` command, which systemd also runs."""
     # Logging first, before uvicorn starts, so it covers uvicorn's own startup lines and any error
     # before the lifespan runs. It stays out of app.py, so importing agent.app changes no logging.
+    logging.Formatter.converter = time.gmtime      # %(asctime)s in UTC, like every other timestamp
     logging.basicConfig(level=config.log_level, format=config.log_format)
 
     from agent.app import app                      # after logging is set up

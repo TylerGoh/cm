@@ -12,8 +12,10 @@ Run: the `file-server` command. Settings come only from .env in the project fold
 
 import asyncio
 import hashlib
+import logging
 import os
 import re
+import time
 import zipfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,6 +29,7 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, Settings
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"     # the project folder
 BIND_HOST = "0.0.0.0"                                       # every service listens on all interfaces
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"   # as the agent's and the daemon's .env.example
 CHUNK_SIZE = 1024 * 1024
 JOB_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
 
@@ -225,7 +228,10 @@ async def put_hypertree(job_id: str, request: Request) -> None:
 def main() -> None:
     """The `file-server` command, which systemd also runs. The app object, not an import string:
     one process, since the per-job locks live in memory."""
-    uvicorn.run(app, host=BIND_HOST, port=config.file_server_port)
+    logging.Formatter.converter = time.gmtime      # %(asctime)s in UTC, like every other timestamp
+    logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
+    # log_config=None: uvicorn's records go through the root handler set up above.
+    uvicorn.run(app, host=BIND_HOST, port=config.file_server_port, log_config=None)
 
 
 if __name__ == "__main__":
