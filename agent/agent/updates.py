@@ -75,8 +75,8 @@ class UpdateManager:
     Artifacts: each version's zip is unpacked into <bundle_dir>/<version>, and each configured
     bundle_symlink_mapping entry is a symlink from a file path under etc_dir to a file in the bundle. With a
     bundle_symlink_default_dir, every other file in the bundle is linked at <etc_dir>/<bundle_symlink_default_dir>/
-    <its name>, flattened. Only links are ever created, replaced or removed; no real file is moved
-    or deleted."""
+    <its name>, flattened. Links into bundle_dir that a bundle no longer needs are removed. Only
+    links are ever created, replaced or removed; no real file is moved or deleted."""
 
     def __init__(self, worker: WorkerClient, *, download_dir: Path, bundle_dir: Path, etc_dir: Path,
                  bundle_symlink_mapping: dict[Path, Path], bundle_symlink_default_dir: Path | None,
@@ -225,7 +225,7 @@ class UpdateManager:
         link is made under a temporary name and renamed over the old one, which replaces the old
         link (an unlink and a symlink with no moment where the target is missing). The files a link
         pointed at are never touched, and a real file at a target path is never moved or deleted.
-        Last, removes the default links this bundle no longer has."""
+        Last, removes the links into bundle_dir that this bundle no longer needs."""
         plan = self._plan_links(bundle)
         for target, source in plan.items():
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -233,7 +233,7 @@ class UpdateManager:
             tmp.unlink(missing_ok=True)
             tmp.symlink_to(source)
             tmp.replace(target)
-        self._remove_stale_default_links(keep=plan.keys())
+        self._remove_stale_links(keep=plan.keys())
 
     def _plan_links(self, bundle: Path) -> dict[Path, Path]:
         """Every link for this bundle, target -> source: the bundle_symlink_mapping entries, then, with a
@@ -265,25 +265,24 @@ class UpdateManager:
                 raise RuntimeError(f"{target} is a real file, not a link; it is left alone")
         return plan
 
-    def _remove_stale_default_links(self, keep: Iterable[Path]) -> None:
-        """Best effort. Removes the links in the default folder that point into bundle_dir but
-        aren't in this bundle's plan: files an older version had. Real files, and links pointing
-        anywhere else, are left alone."""
-        if self._bundle_symlink_default_dir is None:
-            return
-        default_dir = self._etc_dir / self._bundle_symlink_default_dir
-        if not default_dir.is_dir():
-            return
+    def _remove_stale_links(self, keep: Iterable[Path]) -> None:
+        """Best effort. Removes every link under etc_dir that points into bundle_dir but isn't in
+        this bundle's plan: files an older version had, mapping entries since removed, leftover
+        temporary links. Only the agent makes links into bundle_dir, so real files, real folders
+        and links pointing anywhere else are left alone. Linked folders aren't followed, so the
+        walk never leaves etc_dir."""
         kept = set(keep)
-        for entry in default_dir.iterdir():
-            if entry in kept or not entry.is_symlink():
-                continue
-            try:
-                if (entry.parent / os.readlink(entry)).is_relative_to(self._bundle_dir):
-                    entry.unlink()
-                    log.info("removed stale link %s", entry)
-            except OSError:
-                log.warning("couldn't remove stale link %s", entry, exc_info=True)
+        for folder, dirnames, filenames in os.walk(self._etc_dir, followlinks=False):
+            for name in dirnames + filenames:            # a link to a folder is listed in dirnames
+                entry = Path(folder) / name
+                if entry in kept or not entry.is_symlink():
+                    continue
+                try:
+                    if (entry.parent / os.readlink(entry)).is_relative_to(self._bundle_dir):
+                        entry.unlink()
+                        log.info("removed stale link %s", entry)
+                except OSError:
+                    log.warning("couldn't remove stale link %s", entry, exc_info=True)
 
     def _remove_other_bundles(self, keep: Path) -> None:
         """Best effort: a failed removal is logged and doesn't fail the download."""

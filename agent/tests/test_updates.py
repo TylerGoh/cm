@@ -199,6 +199,27 @@ def test_a_newer_version_removes_only_its_stale_default_links(tmp_path: Path) ->
     assert (defaults / "other.conf").read_text() == "other"
 
 
+def test_a_removed_mapping_entry_loses_its_link_anywhere_under_etc(tmp_path: Path) -> None:
+    data = bundle("job_2")
+    m = manager(tmp_path, serve({"/a": data}))
+    asyncio.run(m.download("http://fs/a", sha(data), "job_2"))
+    stale = tmp_path / "etc/old/place/model.bin"                 # what a removed mapping entry left behind
+    stale.parent.mkdir(parents=True)
+    stale.symlink_to(tmp_path / "update_bundle/job_2/vision/model.bin")
+    (tmp_path / "etc/real.conf").write_text("real")
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside/inner.bin").symlink_to(tmp_path / "update_bundle/job_2/vision/model.bin")
+    (tmp_path / "etc/linked_folder").symlink_to(tmp_path / "outside")   # not followed
+
+    asyncio.run(m.download("http://fs/a", sha(data), "job_2"))
+
+    assert not stale.exists() and not stale.is_symlink()
+    assert (tmp_path / "etc/vision/model.bin").is_symlink()            # in the plan: kept
+    assert (tmp_path / "etc/real.conf").read_text() == "real"
+    assert (tmp_path / "etc/linked_folder").is_symlink()               # points elsewhere: kept
+    assert (tmp_path / "outside/inner.bin").is_symlink()               # outside etc: never reached
+
+
 def test_without_a_default_dir_unmapped_files_are_not_linked(tmp_path: Path) -> None:
     data = zip_bytes({"vision/model.bin": b"m", "spam/rules.txt": b"r", "top.conf": b"top"})
     m = manager(tmp_path, serve({"/a": data}))
