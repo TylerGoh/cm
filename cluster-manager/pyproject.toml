@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.27",
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
+    "python-dotenv>=1.0",              # cm reads PORT from .env
     "sqlalchemy[asyncio]>=2.0.30",
     "asyncpg>=0.30",
     "apscheduler>=3.10,<4",

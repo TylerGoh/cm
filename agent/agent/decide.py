@@ -14,6 +14,9 @@ def decide(desired: DesiredState, observed: Observed, memory: AgentMemory) -> Op
         if desired.desired_running and not memory.crash_restarted:
             return OpType.CRASH_RESTART
         return None
+    force_pending = desired.force_update_generation > memory.handled_force_update_generation
+    if status is ProcessStatus.STOPPED and force_pending:
+        return OpType.FORCE_UPDATE                       # before the failed check: a force bump is the way out
     if desired.generation == memory.failed_generation:
         return None
     if not desired.desired_running:

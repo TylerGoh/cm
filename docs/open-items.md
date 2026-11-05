@@ -24,7 +24,7 @@ Both are written out (2026-11-04 entries). Still open:
 
 - The worker's real paths and metrics aren't in the code yet; the contract block is still the mock one, to be regenerated with `tools/metrics_generator` (the reload phases are confirmed as blocking GETs with no body).
 - `download` swaps the `etc_dir` links one by one, not as a set: an agent that dies part-way leaves some links on the new bundle and some on the old until the next `download`.
-- A link whose entry is later removed from `bundle_links` is left behind, pointing into a bundle that the next `download` deletes. Nothing removes stale links today.
+- A link whose entry is later removed from `bundle_symlink_mapping` is left behind, pointing into a bundle that the next `download` deletes. Only stale links in the default folder are removed (2026-11-05).
 - Unpacking drops Unix permissions. Nothing in a bundle can rely on an executable bit.
 - Old console logs are never deleted by the agent; `/tmp` cleaning bounds them.
 
@@ -77,4 +77,4 @@ Every model and repository is written, and runs on PostgreSQL (2026-11-02, 2026-
 - Alerting, to be added later. Candidates so far: an automatic rollback (today it is only logged and recorded in `unstable_reason`), an ACTIVE that came from a rollback breaching the fleet limits (it isn't rolled back, and nothing says so), and canary agents that didn't converge.
 - `cm status` doesn't show the fleet watch's verdict or a breach in progress; only the daemon's log does.
 - The worker's real command names and `WorkerMetrics` fields, and the performance judgement over them (the owner codes it). `agent/worker_client.py` uses mock ones (`show_version`, `counters`, `reload_phase1`, `reload_phase2`), each appended as-is to `WORKER_URL`.
-- `tests/test_decide.py`, `tests/test_pipeline.py`, tests for the daemon beyond the canary judgement, and `tests/integration/`.
+- `tests/test_decide.py` beyond the force bump, `tests/test_pipeline.py`, tests for the daemon beyond the canary judgement, and `tests/integration/`.

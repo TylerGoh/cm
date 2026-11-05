@@ -32,7 +32,7 @@ class ElasticClient:
         await self._index(self._host_index, doc)
 
     async def index_metrics(self, doc: dict[str, object]) -> None:
-        await self._index(self._metrics_index, doc)          # nothing calls it yet: not designed
+        await self._index(self._metrics_index, doc)          # the metrics exporter's documents
 
     async def aclose(self) -> None:
         await self._client.aclose()

@@ -38,14 +38,16 @@ class FakeWorker:
         return self.running
 
 
-def manager(tmp_path: Path, handler: Handler, worker: FakeWorker | None = None) -> UpdateManager:
+def manager(tmp_path: Path, handler: Handler, worker: FakeWorker | None = None,
+            default_dir: Path | None = None) -> UpdateManager:
     (tmp_path / "hypertree").mkdir(exist_ok=True)
     return UpdateManager(
         worker or FakeWorker(),  # type: ignore[arg-type]
         download_dir=tmp_path / "downloads", bundle_dir=tmp_path / "update_bundle",
         etc_dir=tmp_path / "etc",
-        bundle_links={Path("vision/model.bin"): Path("vision/model.bin"),
-                      Path("spam/rules.txt"): Path("routers/spam/rules.txt")},
+        bundle_symlink_mapping={Path("vision/model.bin"): Path("vision/model.bin"),
+                                Path("spam/rules.txt"): Path("routers/spam/rules.txt")},
+        bundle_symlink_default_dir=default_dir,
         hypertree_dir=tmp_path / "hypertree", download_timeout=5, hypertree_timeout=5,
         verify_timeout=0.2, verify_interval=0.05, transport=httpx.MockTransport(handler),
     )
@@ -131,12 +133,87 @@ def test_a_bundle_missing_a_mapped_path_changes_nothing(tmp_path: Path) -> None:
     assert not (tmp_path / "etc/vision/model.bin").exists()
 
 
-def test_bad_bundle_links_are_refused() -> None:
+def test_a_bad_bundle_symlink_mapping_is_refused() -> None:
     with pytest.raises(ValueError, match="relative"):
         UpdateManager(FakeWorker(), download_dir=Path("d"), bundle_dir=Path("b"), etc_dir=Path("e"),  # type: ignore[arg-type]
-                      bundle_links={Path("a"): Path("../escape")},
+                      bundle_symlink_mapping={Path("a"): Path("../escape")}, bundle_symlink_default_dir=None,
                       hypertree_dir=Path("h"), download_timeout=1, hypertree_timeout=1,
                       verify_timeout=1, verify_interval=1)
+
+
+def sha(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+DEFAULTS = Path("defaults")
+
+
+def test_unmapped_files_are_linked_by_name_in_the_default_dir(tmp_path: Path) -> None:
+    data = zip_bytes({"vision/model.bin": b"model", "spam/rules.txt": b"rules",
+                      "top.conf": b"top", "deep/er/extra.bin": b"extra"})
+    m = manager(tmp_path, serve({"/a": data}), default_dir=DEFAULTS)
+    asyncio.run(m.download("http://fs/a", sha(data), "job_2"))
+
+    defaults = tmp_path / "etc/defaults"
+    assert sorted(p.name for p in defaults.iterdir()) == ["extra.bin", "top.conf"]   # mapped files aren't repeated
+    assert (defaults / "extra.bin").is_symlink() and (defaults / "extra.bin").read_text() == "extra"
+    assert (defaults / "top.conf").read_text() == "top"
+    assert (tmp_path / "etc/vision/model.bin").read_text() == "model"
+
+
+def test_two_unmapped_files_with_one_name_change_nothing(tmp_path: Path) -> None:
+    data = zip_bytes({"vision/model.bin": b"m", "spam/rules.txt": b"r", "a/x.conf": b"1", "b/x.conf": b"2"})
+    m = manager(tmp_path, serve({"/a": data}), default_dir=DEFAULTS)
+    with pytest.raises(RuntimeError, match="a/x.conf and b/x.conf would both link to"):
+        asyncio.run(m.download("http://fs/a", sha(data), "job_2"))
+    assert not (tmp_path / "etc/vision/model.bin").exists()      # checked before anything was linked
+
+
+def test_a_real_file_in_the_default_dir_is_refused_and_left_alone(tmp_path: Path) -> None:
+    (tmp_path / "etc/defaults").mkdir(parents=True)
+    (tmp_path / "etc/defaults/top.conf").write_text("real file")
+    data = zip_bytes({"vision/model.bin": b"m", "spam/rules.txt": b"r", "top.conf": b"top"})
+    m = manager(tmp_path, serve({"/a": data}), default_dir=DEFAULTS)
+    with pytest.raises(RuntimeError, match="real file, not a link"):
+        asyncio.run(m.download("http://fs/a", sha(data), "job_2"))
+    assert (tmp_path / "etc/defaults/top.conf").read_text() == "real file"
+
+
+def test_a_newer_version_removes_only_its_stale_default_links(tmp_path: Path) -> None:
+    old = zip_bytes({"vision/model.bin": b"m", "spam/rules.txt": b"r", "keep.conf": b"2", "gone.conf": b"2"})
+    new = zip_bytes({"vision/model.bin": b"m", "spam/rules.txt": b"r", "keep.conf": b"3"})
+    defaults = tmp_path / "etc/defaults"
+    defaults.mkdir(parents=True)
+    (defaults / "mine.conf").write_text("real file")              # a real file: never touched
+    (tmp_path / "elsewhere.conf").write_text("other")
+    (defaults / "other.conf").symlink_to(tmp_path / "elsewhere.conf")   # a link outside bundle_dir: never touched
+    m = manager(tmp_path, serve({"/2": old, "/3": new}), default_dir=DEFAULTS)
+
+    asyncio.run(m.download("http://fs/2", sha(old), "job_2"))
+    assert (defaults / "gone.conf").is_symlink()
+    asyncio.run(m.download("http://fs/3", sha(new), "job_3"))
+
+    assert sorted(p.name for p in defaults.iterdir()) == ["keep.conf", "mine.conf", "other.conf"]
+    assert (defaults / "keep.conf").read_text() == "3"
+    assert (defaults / "mine.conf").read_text() == "real file"
+    assert (defaults / "other.conf").read_text() == "other"
+
+
+def test_without_a_default_dir_unmapped_files_are_not_linked(tmp_path: Path) -> None:
+    data = zip_bytes({"vision/model.bin": b"m", "spam/rules.txt": b"r", "top.conf": b"top"})
+    m = manager(tmp_path, serve({"/a": data}))
+    asyncio.run(m.download("http://fs/a", sha(data), "job_2"))
+    assert sorted(p.relative_to(tmp_path / "etc").as_posix() for p in (tmp_path / "etc").rglob("*")
+                  if p.is_symlink()) == ["routers/spam/rules.txt", "vision/model.bin"]
+
+
+def test_a_bad_default_dir_is_refused() -> None:
+    for bad in (Path("/abs"), Path("../escape")):
+        with pytest.raises(ValueError, match="bundle_symlink_default_dir"):
+            UpdateManager(FakeWorker(), download_dir=Path("d"), bundle_dir=Path("b"), etc_dir=Path("e"),  # type: ignore[arg-type]
+                          bundle_symlink_mapping={}, bundle_symlink_default_dir=bad,
+                          hypertree_dir=Path("h"), download_timeout=1, hypertree_timeout=1,
+                          verify_timeout=1, verify_interval=1)
 
 
 def test_reload_calls_both_phases_in_order(tmp_path: Path) -> None:

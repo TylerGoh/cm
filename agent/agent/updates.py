@@ -1,11 +1,12 @@
 import asyncio
 import hashlib
 import logging
+import os
 import re
 import shutil
 import time
 import zipfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from pathlib import Path
 
 import httpx
@@ -72,22 +73,29 @@ class UpdateManager:
     to the file server.
 
     Artifacts: each version's zip is unpacked into <bundle_dir>/<version>, and each configured
-    bundle_links entry is a symlink from a file path under etc_dir to a file in the bundle. Only
-    links are ever created or replaced; no real file is moved or deleted."""
+    bundle_symlink_mapping entry is a symlink from a file path under etc_dir to a file in the bundle. With a
+    bundle_symlink_default_dir, every other file in the bundle is linked at <etc_dir>/<bundle_symlink_default_dir>/
+    <its name>, flattened. Only links are ever created, replaced or removed; no real file is moved
+    or deleted."""
 
     def __init__(self, worker: WorkerClient, *, download_dir: Path, bundle_dir: Path, etc_dir: Path,
-                 bundle_links: dict[Path, Path], hypertree_dir: Path, download_timeout: float,
+                 bundle_symlink_mapping: dict[Path, Path], bundle_symlink_default_dir: Path | None,
+                 hypertree_dir: Path, download_timeout: float,
                  hypertree_timeout: float, verify_timeout: float, verify_interval: float,
                  transport: httpx.AsyncBaseTransport | None = None) -> None:
-        for source_rel, target_rel in bundle_links.items():
+        for source_rel, target_rel in bundle_symlink_mapping.items():
             for rel in (source_rel, target_rel):
                 if rel.is_absolute() or ".." in rel.parts:
-                    raise ValueError(f"bundle_links: {rel} must be relative, without '..'")
+                    raise ValueError(f"bundle_symlink_mapping: {rel} must be relative, without '..'")
+        default_dir = bundle_symlink_default_dir
+        if default_dir is not None and (default_dir.is_absolute() or ".." in default_dir.parts):
+            raise ValueError(f"bundle_symlink_default_dir: {bundle_symlink_default_dir} must be relative, without '..'")
         self._worker = worker
         self._download_dir = download_dir            # temporary zips (artifact and hypertree)
         self._bundle_dir = bundle_dir                # "update_bundle": one unpacked folder per version
         self._etc_dir = etc_dir
-        self._bundle_links = bundle_links            # file inside a bundle -> file path under etc_dir
+        self._bundle_symlink_mapping = bundle_symlink_mapping            # file inside a bundle -> file path under etc_dir
+        self._bundle_symlink_default_dir = bundle_symlink_default_dir    # folder under etc_dir for every other file; None: off
         self._hypertree_dir = hypertree_dir          # where the worker reads and generates hypertrees
         self._download_timeout = download_timeout    # bounds fetching and unpacking a bundle
         self._hypertree_timeout = hypertree_timeout  # bounds each hypertree step
@@ -212,24 +220,70 @@ class UpdateManager:
         return digest.hexdigest()
 
     def _link(self, bundle: Path) -> None:
-        """Checks every mapping first, so a bad bundle or a real file in the way changes nothing.
-        Then points each target at its file in the bundle. Only links are touched: a new link is
-        made under a temporary name and renamed over the old one, which replaces the old link (an
-        unlink and a symlink with no moment where the target is missing). The files a link pointed
-        at are never touched, and a real file at a target path is never moved or deleted."""
-        for source_rel, target_rel in self._bundle_links.items():
-            if not (bundle / source_rel).is_file():
-                raise RuntimeError(f"bundle {bundle.name} has no file {source_rel}")
-            target = self._etc_dir / target_rel
-            if target.exists() and not target.is_symlink():
-                raise RuntimeError(f"{target} is a real file, not a link; it is left alone")
-        for source_rel, target_rel in self._bundle_links.items():
-            target = self._etc_dir / target_rel
+        """Plans every link first (_plan_links), so a bad bundle or a real file in the way changes
+        nothing. Then points each target at its file in the bundle. Only links are touched: a new
+        link is made under a temporary name and renamed over the old one, which replaces the old
+        link (an unlink and a symlink with no moment where the target is missing). The files a link
+        pointed at are never touched, and a real file at a target path is never moved or deleted.
+        Last, removes the default links this bundle no longer has."""
+        plan = self._plan_links(bundle)
+        for target, source in plan.items():
             target.parent.mkdir(parents=True, exist_ok=True)
             tmp = target.with_name(f".{target.name}.link-tmp")
             tmp.unlink(missing_ok=True)
-            tmp.symlink_to(bundle / source_rel)
+            tmp.symlink_to(source)
             tmp.replace(target)
+        self._remove_stale_default_links(keep=plan.keys())
+
+    def _plan_links(self, bundle: Path) -> dict[Path, Path]:
+        """Every link for this bundle, target -> source: the bundle_symlink_mapping entries, then, with a
+        bundle_symlink_default_dir, every other file in the bundle at <default dir>/<its name>. Raises,
+        before anything changes, if a mapped file is missing, two links would share a target
+        (including two unmapped files with the same name), or a target is a real file."""
+        plan: dict[Path, Path] = {}
+        origin: dict[Path, Path] = {}                # target -> the bundle file it comes from, for errors
+
+        def add(target: Path, source_rel: Path) -> None:
+            if target in plan:
+                raise RuntimeError(f"bundle {bundle.name}: {origin[target]} and {source_rel} "
+                                   f"would both link to {target}")
+            plan[target] = bundle / source_rel
+            origin[target] = source_rel
+
+        for source_rel, target_rel in self._bundle_symlink_mapping.items():
+            if not (bundle / source_rel).is_file():
+                raise RuntimeError(f"bundle {bundle.name} has no file {source_rel}")
+            add(self._etc_dir / target_rel, source_rel)
+        if self._bundle_symlink_default_dir is not None:
+            default_dir = self._etc_dir / self._bundle_symlink_default_dir
+            for path in sorted(bundle.rglob("*")):
+                source_rel = path.relative_to(bundle)
+                if path.is_file() and source_rel not in self._bundle_symlink_mapping:
+                    add(default_dir / path.name, source_rel)
+        for target in plan:
+            if target.exists() and not target.is_symlink():
+                raise RuntimeError(f"{target} is a real file, not a link; it is left alone")
+        return plan
+
+    def _remove_stale_default_links(self, keep: Iterable[Path]) -> None:
+        """Best effort. Removes the links in the default folder that point into bundle_dir but
+        aren't in this bundle's plan: files an older version had. Real files, and links pointing
+        anywhere else, are left alone."""
+        if self._bundle_symlink_default_dir is None:
+            return
+        default_dir = self._etc_dir / self._bundle_symlink_default_dir
+        if not default_dir.is_dir():
+            return
+        kept = set(keep)
+        for entry in default_dir.iterdir():
+            if entry in kept or not entry.is_symlink():
+                continue
+            try:
+                if (entry.parent / os.readlink(entry)).is_relative_to(self._bundle_dir):
+                    entry.unlink()
+                    log.info("removed stale link %s", entry)
+            except OSError:
+                log.warning("couldn't remove stale link %s", entry, exc_info=True)
 
     def _remove_other_bundles(self, keep: Path) -> None:
         """Best effort: a failed removal is logged and doesn't fail the download."""

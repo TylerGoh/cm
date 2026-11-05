@@ -60,7 +60,8 @@ class AgentConfig(BaseSettings):
     download_dir: Path                   # temporary zips
     bundle_dir: Path                     # "update_bundle": one unpacked folder per version
     etc_dir: Path
-    bundle_links: dict[Path, Path]       # JSON object: file inside a bundle -> file path under etc_dir (a symlink)
+    bundle_symlink_mapping: dict[Path, Path]   # JSON object: file inside a bundle -> file path under etc_dir (a symlink)
+    bundle_symlink_default_dir: str            # folder under etc_dir for every other bundle file, by its name; empty: none
     download_timeout: float              # fetching and unpacking one bundle
     hypertree_dir: Path                  # where the worker reads and generates hypertrees
     hypertree_timeout: float             # each hypertree step

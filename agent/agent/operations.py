@@ -57,7 +57,8 @@ class Plan:
 # waits kill the process on timeout, so a retry can't succeed. A failed start ends as a crash
 # (dead pid in STARTING), so no recipe has a finally step. The hypertree steps only speed loading
 # up, so they are non-critical: their failures stay in the step log and never fail the update.
-# FORCE_UPDATE fetches the hypertree for the CRASH_RESTART that loads the new bundle next; nothing
+# FORCE_UPDATE fetches the hypertree for the CRASH_RESTART (or, from STOPPED, the START) that loads
+# the new bundle next; nothing
 # uploads one after a CRASH_RESTART, since a hypertree is never worth risking a recovery for.
 
 def plan(op: OpType, desired: DesiredState, process: ProcessManager, updates: UpdateManager) -> Plan:

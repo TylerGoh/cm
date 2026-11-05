@@ -8,14 +8,15 @@ import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Annotated
 
 import httpx
 import typer
+from dotenv import dotenv_values
 from pydantic import BaseModel
 from rich import box
 from rich.console import Console, Group, RenderableType
-from rich.padding import Padding
 from rich.table import Table
 from rich.text import Text
 
@@ -27,7 +28,16 @@ from cluster_manager.schemas import (
     IncidentRow, RollbackResponse, StatusResponse, VersionListResponse,
 )
 
-DEFAULT_DAEMON_URL = "http://127.0.0.1:8000"     # CM_DAEMON_URL or --daemon-url overrides it
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"     # the daemon's settings, as in daemon/config.py
+FALLBACK_PORT = "8000"
+
+
+def default_daemon_url() -> str:
+    """This box's daemon: PORT from the project's .env when there is one (the daemon's box),
+    8000 otherwise. CM_DAEMON_URL or --daemon-url overrides it. Only PORT is read, so a .env the
+    daemon would reject doesn't stop cm."""
+    port = dotenv_values(ENV_FILE).get("PORT") if ENV_FILE.exists() else None
+    return f"http://127.0.0.1:{port or FALLBACK_PORT}"
 
 # markup=False: daemon text (errors, violations) is printed as-is, never read as Rich markup.
 # highlight=False: only the styles below colour anything.
@@ -110,14 +120,35 @@ def outcome_text(outcome: CanaryOutcome) -> Text:
 
 
 def step_state(step: StepView) -> Text:
-    """attempts == 0 means the stage never ran: skipped by its guard, or the guard failed."""
+    """One word, plus the tries when there was more than one. attempts == 0 means the stage never
+    ran: skipped by its guard, or the guard failed. The error is listed under the table."""
     if step.attempts == 0:
-        if step.ok:
-            return Text("skipped", style="dim")
-        return Text(f"guard failed: {step.error}", style="red")
-    if step.ok:
-        return Text("ok", style="green")
-    return Text(f"failed: {step.error}", style="red")
+        return Text("skipped", style="dim") if step.ok else Text("guard failed", style="red")
+    tries = f" ({step.attempts} tries)" if step.attempts > 1 else ""
+    return Text("ok" + tries, style="green") if step.ok else Text("failed" + tries, style="red")
+
+
+def took(start: datetime, end: datetime | None) -> str:
+    """How long an operation took, or has been running so far."""
+    seconds = int(((end or datetime.now(UTC)) - start).total_seconds())
+    if seconds < 120:
+        return f"{seconds}s"
+    return f"{seconds // 60}m {seconds % 60}s"
+
+
+def operation_result(op: OperationView) -> Text:
+    if op.finished_at is None:
+        return Text("running", style="cyan")
+    return Text("ok", style="green") if op.failure is None else Text("FAILED", style="bold red")
+
+
+def operation_errors(op: OperationView) -> list[Text]:
+    """Each failed step's error, or the operation's failure when no step carries it."""
+    label = f"{op.type} gen {op.generation}"
+    errors = [Text(f"{label}, {s.name}: {s.error}", style="red") for s in op.steps if not s.ok and s.error]
+    if op.failure is not None and not errors:
+        errors.append(Text(f"{label}: {op.failure}", style="red"))
+    return errors
 
 
 def heading(title: str) -> Text:
@@ -163,18 +194,27 @@ def render_agents(r: AgentListResponse) -> RenderableType:
     return table
 
 
-def render_operation(op: OperationView) -> RenderableType:
-    if op.finished_at is None:
-        outcome = Text("running", style="cyan")
-    elif op.failure is None:
-        outcome = Text("ok", style="green")
-    else:
-        outcome = Text(f"FAILED: {op.failure}", style="red")
-    header = Text.assemble(f"{op.type}  generation {op.generation}  started {ago(op.started_at)}  ", outcome)
-    steps = Table.grid(padding=(0, 2))
-    for step in op.steps:
-        steps.add_row(step.name, step_state(step), f"({step.attempts} tries)")
-    return Group(header, Padding(steps, (0, 0, 0, 4)))
+def render_operations(ops: Sequence[OperationView]) -> RenderableType:
+    """A table of short columns, one row per step: the operation's own columns are on its first
+    step's row, and a blank line separates operations. Errors are listed once below it, full
+    width, so they stay readable on a narrow terminal."""
+    table = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    for header in ("op", "gen", "started", "took", "result", "step", "state"):
+        table.add_column(header.upper(), no_wrap=True)
+    errors: list[Text] = []
+    for op in ops:
+        steps = [(s.name, step_state(s)) for s in op.steps] or [("-", Text("no steps", style="dim"))]
+        for i, (name, state) in enumerate(steps):
+            if i == 0:
+                table.add_row(Text(op.type, style="bold"), str(op.generation), ago(op.started_at),
+                              took(op.started_at, op.finished_at), operation_result(op), name, state)
+            else:
+                table.add_row("", "", "", "", "", name, state)
+        table.add_section()
+        errors.extend(operation_errors(op))
+    if not errors:
+        return table
+    return Group(table, Text("errors", style="bold"), *errors)
 
 
 def render_incidents_table(incidents: Sequence[IncidentRow]) -> Table:
@@ -209,15 +249,15 @@ def render_agent(r: AgentDetailResponse) -> RenderableType:
 
     parts.append(heading("current operation"))
     if r.current_operation is not None:
-        parts.append(render_operation(r.current_operation))
+        parts.append(render_operations([r.current_operation]))
     else:
         parts.append("none")
 
     parts.append(heading("recent operations"))
-    if not r.recent_operations:
+    if r.recent_operations:
+        parts.append(render_operations(r.recent_operations))
+    else:
         parts.append("none recorded")
-    for op in r.recent_operations:
-        parts.append(render_operation(op))
 
     parts.append(heading("desired-state history"))
     if not r.history:
@@ -317,7 +357,7 @@ class Options:
 def global_options(
     ctx: typer.Context,
     daemon_url: Annotated[str, typer.Option("--daemon-url", envvar="CM_DAEMON_URL",
-                                            help="The daemon to talk to.")] = DEFAULT_DAEMON_URL,
+                                            help="The daemon to talk to.")] = default_daemon_url(),
     as_json: Annotated[bool, typer.Option("--json", help="Print the daemon's response as JSON.")] = False,
 ) -> None:
     ctx.obj = Options(daemon_url=daemon_url, as_json=as_json)
@@ -409,7 +449,7 @@ def restart(ctx: typer.Context, ip: str) -> None:
 
 @app.command("force-update")
 def force_update(ctx: typer.Context, ip: str) -> None:
-    """Force-update a crashed worker (bumps force_update_generation)."""
+    """Re-download the version and start fresh, for a crashed or stopped worker (bumps force_update_generation)."""
     send(ctx, lambda c: c.force_update(ip), render_change)
 
 

@@ -23,7 +23,8 @@ def managers(tmp_path: Path) -> tuple[ProcessManager, UpdateManager]:
                              command=["true"], console_log_dir=tmp_path, program_log_path=tmp_path / "w.log",
                              initialize_flag="ready", start_timeout=1, stop_timeout=1)
     updates = UpdateManager(worker, download_dir=tmp_path, bundle_dir=tmp_path, etc_dir=tmp_path,
-                            bundle_links={}, hypertree_dir=tmp_path,
+                            bundle_symlink_mapping={}, bundle_symlink_default_dir=None,
+                            hypertree_dir=tmp_path,
                             download_timeout=1, hypertree_timeout=1, verify_timeout=1, verify_interval=1)
     return process, updates
 

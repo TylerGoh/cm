@@ -56,11 +56,12 @@ async def restart(session: AsyncSession, ip: str) -> DesiredStateChangeResponse:
 
 
 async def force_update(session: AsyncSession, ip: str) -> DesiredStateChangeResponse:
-    """Bumps force_update_generation, only while the worker is CRASHED (a bump while RUNNING
-    would wait for the next crash)."""
+    """Bumps force_update_generation, only while the worker is CRASHED or STOPPED: the agent runs
+    FORCE_UPDATE from those two, and a bump while RUNNING would wait for the next crash."""
     _, observed = await _live_rows(session, ip)
-    if observed.process_status is not ProcessStatus.CRASHED:
-        raise ActionRefused(f"{ip} is {observed.process_status}, not crashed; force updates are for crashed workers")
+    if observed.process_status not in (ProcessStatus.CRASHED, ProcessStatus.STOPPED):
+        raise ActionRefused(f"{ip} is {observed.process_status}; force updates are for crashed or stopped "
+                            f"workers (use restart for a running one)")
     row = await DesiredStateRepo(session).apply(ip, datetime.now(UTC), bump_force_update=True)
     return await _commit_change(session, row, ip)
 

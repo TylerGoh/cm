@@ -52,7 +52,7 @@ The agent works through it over as many ticks and operations as needed; only `fa
 **Generation counters start at 0 on both sides.** No baselining; the cluster manager resets them on re-provisioning.
 
 **Crash budget: one automatic CRASH_RESTART, then CRASHED_HOLD.**
-Only UPDATE and FORCE_UPDATE reset `crash_restarted`. A force bump is the way out of CRASHED_HOLD. An agent restart ending CRASHED_HOLD for a dead worker is accepted.
+Only UPDATE and FORCE_UPDATE reset `crash_restarted`. A force bump is the way out of CRASHED_HOLD, and of a STOPPED worker whose start failed (2026-11-05). An agent restart ending CRASHED_HOLD for a dead worker is accepted.
 Why: the budget is a convenience, not a safety mechanism, so it stays simple.
 
 **`plan()` runs before the crash budget is spent; a `plan()` error is a bug, not a failed operation.**

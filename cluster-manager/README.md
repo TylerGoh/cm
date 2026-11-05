@@ -56,7 +56,8 @@ database. If the database isn't accepting connections yet, the daemon fails and 
 
 ## cm
 
-`cm` talks to the daemon at `http://127.0.0.1:8000` by default. Set `CM_DAEMON_URL` or pass
+`cm` talks to the daemon at `http://127.0.0.1:<PORT>`, with `PORT` from this folder's `.env`, or
+`http://127.0.0.1:8000` where there is no `.env`. Set `CM_DAEMON_URL` or pass
 `--daemon-url` for another host or port. Only `cm daemon` needs `.env`, so `cm` can run from any
 machine that reaches the daemon, after the same `pip install -e .`.
 

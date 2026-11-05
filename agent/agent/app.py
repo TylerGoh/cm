@@ -6,6 +6,7 @@ import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import FastAPI
 
@@ -111,7 +112,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                              initialize_flag=config.worker_initialize_flag,
                              start_timeout=config.start_timeout, stop_timeout=config.stop_timeout)
     updates = UpdateManager(worker, download_dir=config.download_dir, bundle_dir=config.bundle_dir,
-                            etc_dir=config.etc_dir, bundle_links=config.bundle_links,
+                            etc_dir=config.etc_dir,
+                            bundle_symlink_mapping=config.bundle_symlink_mapping,
+                            bundle_symlink_default_dir=(Path(config.bundle_symlink_default_dir)
+                                                        if config.bundle_symlink_default_dir else None),
                             hypertree_dir=config.hypertree_dir,
                             download_timeout=config.download_timeout,
                             hypertree_timeout=config.hypertree_timeout,
