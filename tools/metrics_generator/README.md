@@ -1,7 +1,7 @@
 # metrics_generator
 
 Writes the worker contract block for `agent/agent/worker_client.py` from a YAML file: the worker's
-version and reload paths, its metric endpoints, and the `WorkerMetrics` model. You describe the
+version and reload commands, its metric commands, and the `WorkerMetrics` model. You describe the
 worker once in YAML; the script writes the Python to paste.
 
 It does not write the performance judgement. That is yours to code in `agent/agent/performance.py`;
@@ -11,7 +11,7 @@ the sample at the end shows the pattern.
 
 ```bash
 pip install pyyaml pydantic            # any virtualenv; the agent's already has pydantic
-cp worker.example.yaml worker.yaml     # then put in the real paths and metrics
+cp worker.example.yaml worker.yaml     # then put in the real commands and metrics
 python generate.py worker.yaml
 ```
 
@@ -21,12 +21,12 @@ by git.
 ## The YAML
 
 ```yaml
-version_path: /show_version          # answers {"version": "..."}; also the health ping
-reload_phase1_path: /reload_phase1   # GET, no body, blocks until done
-reload_phase2_path: /reload_phase2   # GET, no body, blocks until the worker runs the new code
+version_command: show_version          # answers {"version": "..."}; also the health ping
+reload_phase1_command: reload_phase1   # GET, no body, blocks until done
+reload_phase2_command: reload_phase2   # GET, no body, blocks until the worker runs the new code
 
 endpoints:                           # each a GET answering one flat JSON object
-  - path: /stats                     # Python name derived: STATS_ENDPOINT
+  - command: stats                   # Python name derived: STATS_ENDPOINT
     metrics:
       - name: req.out                # its key in the JSON, exactly as the worker sends it
         field: requests_out          # the WorkerMetrics field, snake_case
@@ -35,7 +35,7 @@ endpoints:                           # each a GET answering one flat JSON object
         field: queue_depth
         type: gauge                  # gauge: a current value
         description: requests waiting   # optional; becomes a comment
-  - path: /memory
+  - command: memory
     constant: MEMORY_ENDPOINT        # optional: choose the Python name yourself
     metrics:
       - {name: rss_bytes, field: rss_bytes, type: gauge}
@@ -49,6 +49,11 @@ Each metric has two names:
   agent's metrics exporter sends each reading to the metrics index under the field names, every
   `METRICS_EXPORT_INTERVAL`, along with `at`, `running_version`, `updating` and the host fields,
   so a field can't take one of those names.
+
+Every command (`version_command`, the reload commands, each endpoint's `command`) is appended
+as-is to the agent's `WORKER_URL`, which ends where the command name goes (for example
+`http://127.0.0.1:9000/api?command=`). So a command is a bare name: no leading slash, no
+whitespace. The generator refuses one that starts with `/`.
 
 One endpoint can mix counters and gauges. Every `field` and every `name` must be unique across
 the file. Mistakes are reported with the entry they are in, before anything is written.

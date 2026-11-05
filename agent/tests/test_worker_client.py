@@ -5,30 +5,52 @@ import httpx
 import pytest
 
 from agent.worker_client import (
-    METRIC_SOURCES, RELOAD_PHASE1_PATH, RELOAD_PHASE2_PATH, VERSION_PATH, WorkerClient,
+    METRIC_SOURCES, RELOAD_PHASE1_COMMAND, RELOAD_PHASE2_COMMAND, VERSION_COMMAND, WorkerClient,
 )
 
 type Handler = Callable[[httpx.Request], httpx.Response]
 
+BASE_URL = "http://worker/api?command="     # the real shape: commands are appended to a query
+
 
 def client(handler: Handler) -> WorkerClient:
-    return WorkerClient("http://worker", timeout=2.0, reload_timeout=30.0,
+    return WorkerClient(BASE_URL, timeout=2.0, reload_timeout=30.0,
                         transport=httpx.MockTransport(handler))
 
 
+def command_of(request: httpx.Request) -> str:
+    """The command a request was for: everything after the base URL."""
+    url = str(request.url)
+    assert url.startswith(BASE_URL), url
+    return url.removeprefix(BASE_URL)
+
+
 def full_payloads() -> dict[str, dict[str, object]]:
-    return {path: {name: 1.0 for name in names} for path, names in METRIC_SOURCES.items()}
+    return {command: {name: 1.0 for name in names} for command, names in METRIC_SOURCES.items()}
 
 
 def serve(payloads: dict[str, dict[str, object]]) -> Handler:
     def handler(request: httpx.Request) -> httpx.Response:
-        payload = payloads.get(request.url.path)
+        payload = payloads.get(command_of(request))
         return httpx.Response(200, json=payload) if payload is not None else httpx.Response(404)
     return handler
 
 
 def refuse(request: httpx.Request) -> httpx.Response:
     raise httpx.ConnectError("worker is down")
+
+
+# --- URLs ---
+
+def test_command_is_appended_to_the_base_url_as_is():
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"version": "1.2.3"})
+
+    asyncio.run(client(handler).version())
+    assert seen == [BASE_URL + VERSION_COMMAND]
 
 
 # --- metrics ---
@@ -95,15 +117,15 @@ def test_version_failure_is_none():
     assert asyncio.run(client(refuse).version()) is None
 
 
-def test_health_uses_the_version_endpoint():
+def test_health_uses_the_version_command():
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request.url.path)
+        seen.append(command_of(request))
         return httpx.Response(200, json={"version": "1.2.3"})
 
     asyncio.run(client(handler).health())
-    assert seen == [VERSION_PATH]
+    assert seen == [VERSION_COMMAND]
 
 
 def test_health_distinguishes_unhealthy_from_unanswered():
@@ -114,17 +136,17 @@ def test_health_distinguishes_unhealthy_from_unanswered():
 
 # --- reload phases ---
 
-def test_reload_phases_are_gets_to_their_paths():
+def test_reload_phases_are_gets_to_their_commands():
     seen: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append((request.method, request.url.path))
+        seen.append((request.method, command_of(request)))
         return httpx.Response(200)
 
     c = client(handler)
     asyncio.run(c.reload_phase1())
     asyncio.run(c.reload_phase2())
-    assert seen == [("GET", RELOAD_PHASE1_PATH), ("GET", RELOAD_PHASE2_PATH)]
+    assert seen == [("GET", RELOAD_PHASE1_COMMAND), ("GET", RELOAD_PHASE2_COMMAND)]
 
 
 def test_reload_raises_with_the_workers_explanation():

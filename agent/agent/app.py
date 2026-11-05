@@ -101,6 +101,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     worker = WorkerClient(config.worker_url, timeout=config.worker_timeout,
                           reload_timeout=config.reload_timeout)
     elastic = ElasticClient(config.elastic_url, host, cert_path=config.elastic_cert_path,
+                            api_key=config.elastic_api_key.get_secret_value(),
                             metrics_index=config.elastic_metrics_index,
                             host_index=config.elastic_host_index, timeout=config.elastic_timeout)
     cluster_manager = ClusterManagerClient(config.cluster_manager_url)

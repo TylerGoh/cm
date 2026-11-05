@@ -26,6 +26,18 @@ DOCUMENT_KEYS = frozenset({"at", "running_version", "updating", "host", "ipv4", 
 
 # --- the YAML file's shape ---
 
+def checked_command(value: str) -> str:
+    """A command is appended to WORKER_URL with nothing in between (the base URL ends in something
+    like `?command=`), so it is a bare name: not empty, no leading slash, no whitespace."""
+    if not value:
+        raise ValueError("a command can't be empty")
+    if value.startswith("/"):
+        raise ValueError(f"{value!r} must not start with /: commands are appended to WORKER_URL as-is")
+    if any(character.isspace() for character in value):
+        raise ValueError(f"{value!r} must not contain whitespace")
+    return value
+
+
 class MetricKind(StrEnum):
     COUNTER = auto()        # cumulative since the worker started: the amount over a window is newest - oldest
     GAUGE = auto()          # a current value: the reading is the value
@@ -53,16 +65,14 @@ class MetricSpec(BaseModel):
 class EndpointSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    path: str                           # GET path on the worker; answers one flat JSON object
-    constant: str | None = None         # the Python name for it; derived from the path when left out
+    command: str                        # appended as-is to the worker's base URL; answers one flat JSON object
+    constant: str | None = None         # the Python name for it; derived from the command when left out
     metrics: list[MetricSpec] = Field(min_length=1)
 
-    @field_validator("path")
+    @field_validator("command")
     @classmethod
-    def _path_is_absolute(cls, value: str) -> str:
-        if not value.startswith("/"):
-            raise ValueError(f"{value!r} must start with /")
-        return value
+    def _command_is_appended(cls, value: str) -> str:
+        return checked_command(value)
 
     @field_validator("constant")
     @classmethod
@@ -75,21 +85,26 @@ class EndpointSpec(BaseModel):
 class ContractSpec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    version_path: str                   # answers {"version": "..."}; also the health ping
-    reload_phase1_path: str             # GET, no body, blocks until phase 1 is done
-    reload_phase2_path: str             # GET, no body, blocks until the worker runs the new code
+    version_command: str                # answers {"version": "..."}; also the health ping
+    reload_phase1_command: str          # GET, no body, blocks until phase 1 is done
+    reload_phase2_command: str          # GET, no body, blocks until the worker runs the new code
     endpoints: list[EndpointSpec] = Field(min_length=1)
+
+    @field_validator("version_command", "reload_phase1_command", "reload_phase2_command")
+    @classmethod
+    def _commands_are_appended(cls, value: str) -> str:
+        return checked_command(value)
 
 
 # --- checks across the whole file ---
 
 def endpoint_constant(endpoint: EndpointSpec) -> str:
-    """The endpoint's Python name: given, or derived from the path (/stats/queue -> STATS_QUEUE_ENDPOINT)."""
+    """The endpoint's Python name: given, or derived from the command (stats.queue -> STATS_QUEUE_ENDPOINT)."""
     if endpoint.constant is not None:
         return endpoint.constant
-    stem = re.sub(r"[^A-Za-z0-9]+", "_", endpoint.path).strip("_").upper()
+    stem = re.sub(r"[^A-Za-z0-9]+", "_", endpoint.command).strip("_").upper()
     if not stem or stem[0].isdigit():
-        raise SystemExit(f"generate: can't name {endpoint.path!r} from its path; give it a `constant`")
+        raise SystemExit(f"generate: can't name {endpoint.command!r} from its command; give it a `constant`")
     return f"{stem}_ENDPOINT"
 
 
@@ -102,17 +117,17 @@ def check(contract: ContractSpec) -> None:
     for endpoint in contract.endpoints:
         constant = endpoint_constant(endpoint)
         if constant in constants:
-            raise SystemExit(f"generate: {endpoint.path} and {constants[constant]} both become {constant}")
-        constants[constant] = endpoint.path
+            raise SystemExit(f"generate: {endpoint.command} and {constants[constant]} both become {constant}")
+        constants[constant] = endpoint.command
         for metric in endpoint.metrics:
             if metric.field in fields:
                 raise SystemExit(f"generate: field {metric.field} is used by {fields[metric.field]} "
-                                 f"and {endpoint.path} {metric.name}")
-            fields[metric.field] = f"{endpoint.path} {metric.name}"
+                                 f"and {endpoint.command} {metric.name}")
+            fields[metric.field] = f"{endpoint.command} {metric.name}"
             if metric.name in names:
                 raise SystemExit(f"generate: name {metric.name!r} appears on {names[metric.name]} "
-                                 f"and {endpoint.path}; each name may appear once")
-            names[metric.name] = endpoint.path
+                                 f"and {endpoint.command}; each name may appear once")
+            names[metric.name] = endpoint.command
 
 
 # --- rendering ---
@@ -128,25 +143,26 @@ def render(contract: ContractSpec, source: str) -> str:
         f"# --- BEGIN worker contract: generated by tools/metrics_generator from {source}; "
         "paste over this whole block ---",
         "",
-        "# Paths on the worker. Every query and command is a GET with no body.",
-        f"VERSION_PATH = {quoted(contract.version_path)}           # version() and health() both use it",
-        f"RELOAD_PHASE1_PATH = {quoted(contract.reload_phase1_path)}    # blocks until done; success means done",
-        f"RELOAD_PHASE2_PATH = {quoted(contract.reload_phase2_path)}    # blocks until the worker runs the new code",
+        "# Commands on the worker, each appended as-is to the base URL (WORKER_URL). Every query and",
+        "# command is a GET with no body.",
+        f"VERSION_COMMAND = {quoted(contract.version_command)}           # version() and health() both use it",
+        f"RELOAD_PHASE1_COMMAND = {quoted(contract.reload_phase1_command)}    # blocks until done; success means done",
+        f"RELOAD_PHASE2_COMMAND = {quoted(contract.reload_phase2_command)}    # blocks until the worker runs the new code",
         "",
-        "# Metric endpoints: each answers one flat JSON object.",
+        "# Metric commands: each answers one flat JSON object.",
     ]
     for endpoint in contract.endpoints:
-        lines.append(f"{endpoint_constant(endpoint)} = MetricSource({quoted(endpoint.path)})")
+        lines.append(f"{endpoint_constant(endpoint)} = MetricSource({quoted(endpoint.command)})")
     lines += [
         "",
         "",
         "class WorkerMetrics(BaseModel):",
         '    """One flat reading of the worker at one instant. Every field declares a MetricType,',
-        '    a MetricSource and the name it has at that endpoint (validation_alias)."""',
+        '    a MetricSource and the name it has in that command\'s answer (validation_alias)."""',
         "    model_config = ConfigDict(frozen=True)",
     ]
     for endpoint in contract.endpoints:
-        lines += ["", f"    # {endpoint.path}"]
+        lines += ["", f"    # {endpoint.command}"]
         for metric in endpoint.metrics:
             kind = "MetricType.COUNTER" if metric.type is MetricKind.COUNTER else "MetricType.GAUGE"
             line = (f"    {metric.field + ':':<{width}} Annotated[float, {kind}, {endpoint_constant(endpoint)}, "
@@ -178,7 +194,7 @@ def main(argv: list[str]) -> int:
     counters = sum(m.type is MetricKind.COUNTER for e in contract.endpoints for m in e.metrics)
     gauges = sum(m.type is MetricKind.GAUGE for e in contract.endpoints for m in e.metrics)
     print(f"wrote {OUTPUT}")
-    print(f"{len(contract.endpoints)} endpoints, {counters} counters, {gauges} gauges")
+    print(f"{len(contract.endpoints)} metric commands, {counters} counters, {gauges} gauges")
     print("paste it over the worker contract block in agent/agent/worker_client.py, then update")
     print("agent/agent/performance.py, which reads the WorkerMetrics fields by name")
     return 0

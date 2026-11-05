@@ -157,6 +157,11 @@ Cost: no verdict for the first 5 minutes after an update.
 **A broken metrics source is reported as `metrics_available=False`;** the cluster manager alerts on it.
 
 **`WorkerClient` queries return `None` on failure; commands raise; `metrics()` is all or nothing.**
+
+**Every worker request is the base URL with a command appended as-is** (2026-11-05).
+The worker's base URL (`config.worker_url`) ends where the command name goes, typically in a query such as `...?command=`, so the contract constants are bare command names (`show_version`, `counters`, `reload_phase1`, `reload_phase2`) with no leading slash, and `WorkerClient` builds each URL as `base_url + command`. It doesn't give the base URL to `httpx`. The metrics generator's YAML says `*_command` and `command:`, and refuses a leading slash.
+Why: `httpx`'s `base_url` always adds a `/` to the base, so `...?command=` plus `show_version` became `...?command=/show_version`.
+Cost: nothing checks the base URL's shape; one that ends in the wrong place sends every command to the wrong URL, which shows up as health and metrics failures.
 A missing metric name is logged once, and again only after a complete reading (2026-11-05).
 
 **The worker contract is generated from YAML; the judgement is hand-written (2026-11-05).**
@@ -171,6 +176,11 @@ Why: the contract is pure description, so a generator keeps it consistent; the j
 A metrics exporter loop sends one document per `METRICS_EXPORT_INTERVAL` while the worker is RUNNING: the reading's fields, plus `at`, `running_version`, `updating` and the host fields. Counters go cumulative. A metric has two names only: the intake name (the worker's JSON key, the `validation_alias`) and the field name, which is also its Elastic name.
 Why: the owner wants the raw metrics in Elastic on a fixed cadence; the worker's dotted names would become nested objects in Elastic, so they stay on the intake side.
 **Two indexes, metrics and host;** the client adds `host`, `ipv4`, `location` to every document. TLS uses the CA in `elastic.cert`; a missing cert fails startup.
+
+**Elastic requests authenticate with an API key** (2026-11-05).
+`config.elastic_api_key` (a `SecretStr`) is sent on every request as `Authorization: ApiKey <key>`, the encoded key as Elastic issues it. TLS verification against `elastic.cert` stays.
+Why: the Elastic cluster requires an API key. `SecretStr` keeps the key out of reprs and logs; it is unwrapped only where the client is built.
+Cost: a wrong or revoked key only shows as logged write failures (401), since Elastic writes never raise; documents are lost until the key is fixed.
 
 ## Agent app
 

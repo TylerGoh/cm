@@ -9,7 +9,7 @@ from ipaddress import IPv4Address
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 ENV_FILE = Path(__file__).resolve().parent / ".env"     # always next to this module, whatever the cwd
@@ -52,7 +52,7 @@ class AgentConfig(BaseSettings):
     stop_timeout: float                  # bounds the wait for the exit after a kill
 
     # worker HTTP (WorkerClient)
-    worker_url: str
+    worker_url: str                      # a prefix: each command is appended as-is, e.g. http://127.0.0.1:9000/api?command=
     worker_timeout: float                # every call except the reload phases; keep it short
     reload_timeout: float                # each reload phase
 
@@ -84,6 +84,7 @@ class AgentConfig(BaseSettings):
     # elastic
     elastic_url: str
     elastic_cert_path: Path              # elastic.cert: the CA certificate that verifies Elastic
+    elastic_api_key: SecretStr           # Elastic's encoded API key; SecretStr keeps it out of reprs and logs
     elastic_metrics_index: str
     elastic_host_index: str              # inventory records and the agent_started record
     elastic_timeout: float               # short: the start record is awaited during startup

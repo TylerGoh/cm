@@ -56,7 +56,7 @@ service. The units expect each folder at `/opt/<folder>` and run as root.
 
 ## The worker's metrics
 
-The agent's worker contract (the worker's paths and its metrics) is generated, not written by
+The agent's worker contract (the worker's commands and its metrics) is generated, not written by
 hand: describe the worker in YAML and run `tools/metrics_generator/generate.py`. Its README says
 how to paste the result into the agent, and has a sample performance judgement.
 
