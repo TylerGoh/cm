@@ -131,9 +131,19 @@ class WorkerClient:
             return None
 
     async def version(self) -> str | None:
+        """The active app version. The version command answers a table whose first row names
+        the columns, e.g. [["type", "version", "active"], ["app", "0.1", "N"], ["app", "0.2", "Y"]].
+        Returns the version of the first row with type "app" and active "Y" (any case); None if there is none
+        or the answer isn't that shape."""
         try:
-            payload = await self._get_json(VERSION_COMMAND)
-            return str(payload["version"])
+            response = await self._http.get(self._url(VERSION_COMMAND))
+            response.raise_for_status()
+            header, *rows = response.json()
+            type_col, version_col, active_col = (header.index(c) for c in ("type", "version", "active"))
+            for row in rows:
+                if str(row[type_col]).lower() == "app" and str(row[active_col]).upper() == "Y":
+                    return str(row[version_col])
+            return None
         except Exception:
             return None
 

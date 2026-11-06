@@ -32,7 +32,7 @@ rename: {}
 # prepare.py refuses a setting the agent doesn't have. Write a literal brace as {{ or }}.
 # Commands are values: they're never renamed.
 worker:
-  version_command: show_version          # answers {"version": "..."}; also the health ping
+  version_command: show_version          # answers [["type","version","active"], ...]; also the health ping
   reload_phase1_command: reload_phase1   # GET, no body, blocks until phase 1 is done
   reload_phase2_command: reload_phase2   # GET, no body, blocks until the worker runs the new code
 

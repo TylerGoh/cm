@@ -15,6 +15,9 @@ type Handler = Callable[[httpx.Request], httpx.Response]
 
 BASE_URL = "http://worker/api?command="     # the real shape: commands are appended to a query
 
+# What the version command answers: a header row, then one row per installed version.
+VERSIONS = [["type", "version", "active"], ["app", "1.2.2", "N"], ["app", "1.2.3", "Y"]]
+
 
 class AnySettings:
     """Stands in for the agent's config: commands are format strings over its settings
@@ -64,7 +67,7 @@ def test_command_is_appended_to_the_base_url_as_is():
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(str(request.url))
-        return httpx.Response(200, json={"version": "1.2.3"})
+        return httpx.Response(200, json=VERSIONS)
 
     asyncio.run(client(handler).version())
     assert seen == [BASE_URL + filled(VERSION_COMMAND)]
@@ -126,8 +129,28 @@ def test_metrics_invalid_value_is_none():
 # --- version and health (the same endpoint) ---
 
 def test_version():
-    c = client(lambda r: httpx.Response(200, json={"version": "1.2.3"}))
+    c = client(lambda r: httpx.Response(200, json=VERSIONS))
     assert asyncio.run(c.version()) == "1.2.3"
+
+
+def test_version_finds_columns_by_header():
+    table = [["active", "type", "version"], ["N", "app", "0.1"], ["Y", "other", "9"], ["Y", "app", "0.2"]]
+    assert asyncio.run(client(lambda r: httpx.Response(200, json=table)).version()) == "0.2"
+
+
+def test_version_ignores_case():
+    table = [["type", "version", "active"], ["App", "0.1", "n"], ["APP", "0.2", "y"]]
+    assert asyncio.run(client(lambda r: httpx.Response(200, json=table)).version()) == "0.2"
+
+
+def test_version_no_active_app_is_none():
+    table = [["type", "version", "active"], ["app", "0.1", "N"], ["lib", "0.2", "Y"]]
+    assert asyncio.run(client(lambda r: httpx.Response(200, json=table)).version()) is None
+
+
+def test_version_unexpected_shape_is_none():
+    for payload in ({"version": "1.2.3"}, [], [["type", "version"]], [["type", "version", "active"], ["app"]]):
+        assert asyncio.run(client(lambda r, p=payload: httpx.Response(200, json=p)).version()) is None
 
 
 def test_version_failure_is_none():
@@ -139,7 +162,7 @@ def test_health_uses_the_version_command():
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(command_of(request))
-        return httpx.Response(200, json={"version": "1.2.3"})
+        return httpx.Response(200, json=VERSIONS)
 
     asyncio.run(client(handler).health())
     assert seen == [VERSION_COMMAND]

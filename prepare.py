@@ -127,7 +127,7 @@ class EndpointSpec(Lenient):
 
 
 class WorkerSpec(Lenient):
-    version_command: str                # answers {"version": "..."}; also the health ping
+    version_command: str                # answers [["type","version","active"], ...]; also the health ping
     reload_phase1_command: str          # GET, no body, blocks until phase 1 is done
     reload_phase2_command: str          # GET, no body, blocks until the worker runs the new code
     endpoints: list[EndpointSpec] = Field(min_length=1)
