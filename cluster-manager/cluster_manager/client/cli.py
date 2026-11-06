@@ -142,12 +142,12 @@ def operation_result(op: OperationView) -> Text:
     return Text("ok", style="green") if op.failure is None else Text("FAILED", style="bold red")
 
 
-def operation_errors(op: OperationView) -> list[Text]:
-    """Each failed step's error, or the operation's failure when no step carries it."""
-    label = f"{op.type} gen {op.generation}"
-    errors = [Text(f"{label}, {s.name}: {s.error}", style="red") for s in op.steps if not s.ok and s.error]
+def operation_errors(op: OperationView) -> list[tuple[str, str]]:
+    """(step, error) for each failed step, or ("-", the operation's failure) when no step
+    carries it."""
+    errors = [(s.name, s.error) for s in op.steps if not s.ok and s.error]
     if op.failure is not None and not errors:
-        errors.append(Text(f"{label}: {op.failure}", style="red"))
+        errors.append(("-", op.failure))
     return errors
 
 
@@ -195,13 +195,17 @@ def render_agents(r: AgentListResponse) -> RenderableType:
 
 
 def render_operations(ops: Sequence[OperationView]) -> RenderableType:
-    """A table of short columns, one row per step: the operation's own columns are on its first
-    step's row, and a blank line separates operations. Errors are listed once below it, full
-    width, so they stay readable on a narrow terminal."""
+    """A table of short columns, one row per step, in the order given (callers pass oldest
+    first): the operation's own columns are on its first step's row, and a blank line separates
+    operations. Errors get their own table below it, in the same order, where only the message
+    wraps, so it stays readable on a narrow terminal."""
     table = Table(box=box.SIMPLE_HEAD, pad_edge=False)
     for header in ("op", "gen", "started", "took", "result", "step", "state"):
         table.add_column(header.upper(), no_wrap=True)
-    errors: list[Text] = []
+    errors = Table(box=box.SIMPLE_HEAD, pad_edge=False)
+    for header in ("op", "gen", "step"):
+        errors.add_column(header.upper(), no_wrap=True)
+    errors.add_column("ERROR", overflow="fold", style="red")      # only the message wraps
     for op in ops:
         steps = [(s.name, step_state(s)) for s in op.steps] or [("-", Text("no steps", style="dim"))]
         for i, (name, state) in enumerate(steps):
@@ -211,10 +215,11 @@ def render_operations(ops: Sequence[OperationView]) -> RenderableType:
             else:
                 table.add_row("", "", "", "", "", name, state)
         table.add_section()
-        errors.extend(operation_errors(op))
-    if not errors:
+        for step, error in operation_errors(op):
+            errors.add_row(op.type, str(op.generation), step, error)
+    if not errors.row_count:
         return table
-    return Group(table, Text("errors", style="bold"), *errors)
+    return Group(table, Text("errors", style="bold"), errors)
 
 
 def render_incidents_table(incidents: Sequence[IncidentRow]) -> Table:
@@ -226,8 +231,41 @@ def render_incidents_table(incidents: Sequence[IncidentRow]) -> Table:
 
 
 def render_agent(r: AgentDetailResponse) -> RenderableType:
+    """Least important at the top, most important at the bottom, next to the prompt: history,
+    operations (oldest first), the current operation, incidents, the state, and last the agent's
+    IP and condition."""
     a = r.agent
-    parts: list[RenderableType] = [Text.assemble((a.ip, "bold"), "  ", condition_text(a.condition))]
+    parts: list[RenderableType] = [heading("desired-state history")]
+    if not r.history:
+        parts.append("none recorded")
+    else:
+        history = new_table("gen", "version", "running", "restart", "force", "changed")
+        for h in reversed(r.history):                    # the daemon sends newest first
+            history.add_row(str(h.generation), h.version, str(h.desired_running),
+                            str(h.restart_generation), str(h.force_update_generation), ago(h.changed_at))
+        parts.append(history)
+
+    parts.append(heading("recent operations"))
+    if r.recent_operations:
+        parts.append(render_operations(list(reversed(r.recent_operations))))
+    else:
+        parts.append("none recorded")
+
+    parts.append(heading("current operation"))
+    if r.current_operation is not None:
+        parts.append(render_operations([r.current_operation]))
+    else:
+        parts.append("none")
+
+    if r.open_incidents:
+        parts.append(heading("open incidents"))
+        parts.append(render_incidents_table(r.open_incidents))
+
+    parts.append(Text(""))
+    parts.append(Text(f"agent {a.agent_status}, healthy {show(a.healthy)}, performance {performance(a)}, "
+                      f"last heartbeat {ago(a.last_heartbeat_at)}, registered {ago(r.registered_at)}"))
+    for violation in a.violations or []:
+        parts.append(Text(f"violation: {violation}", style="red"))
 
     compare = new_table("", "desired", "observed")
     compare.add_row("version", a.desired_version, show(a.running_version))
@@ -241,43 +279,13 @@ def render_agent(r: AgentDetailResponse) -> RenderableType:
                     f"handled {r.handled_force_update_generation}")
     parts.append(compare)
 
-    parts.append(Text(f"agent {a.agent_status}, healthy {show(a.healthy)}, performance {performance(a)}, "
-                      f"last heartbeat {ago(a.last_heartbeat_at)}, registered {ago(r.registered_at)}"))
-    if a.violations:
-        for violation in a.violations:
-            parts.append(Text(f"violation: {violation}", style="red"))
-
-    parts.append(heading("current operation"))
-    if r.current_operation is not None:
-        parts.append(render_operations([r.current_operation]))
-    else:
-        parts.append("none")
-
-    parts.append(heading("recent operations"))
-    if r.recent_operations:
-        parts.append(render_operations(r.recent_operations))
-    else:
-        parts.append("none recorded")
-
-    parts.append(heading("desired-state history"))
-    if not r.history:
-        parts.append("none recorded")
-    else:
-        history = new_table("gen", "version", "running", "restart", "force", "changed")
-        for h in r.history:
-            history.add_row(str(h.generation), h.version, str(h.desired_running),
-                            str(h.restart_generation), str(h.force_update_generation), ago(h.changed_at))
-        parts.append(history)
-
-    if r.open_incidents:
-        parts.append(heading("open incidents"))
-        parts.append(render_incidents_table(r.open_incidents))
+    parts.append(Text.assemble((a.ip, "bold"), "  ", condition_text(a.condition)))
     return Group(*parts)
 
 
 def render_versions(r: VersionListResponse) -> RenderableType:
     table = new_table("version", "status", "agents", "created", "verified", "note")
-    for v in r.versions:
+    for v in reversed(r.versions):                       # the daemon sends newest first
         note = v.unstable_reason or ("activated by rollback" if v.activated_by_rollback else "")
         table.add_row(v.version, v.status, str(v.agents), ago(v.created_at), ago(v.verified_at), note)
     return table
@@ -304,15 +312,15 @@ def render_canary(r: CanaryResponse) -> RenderableType:
     else:
         verdict = Text.assemble("if judged now: ", ("promote", "green"))
     title = Text(f"{c.version}  started {ago(c.created_at)}, judged {until(c.deadline)}", style="bold")
-    return Group(title, outcomes, counts, Text(""), verdict)
+    return Group(outcomes, counts, Text(""), title, verdict)      # the verdict last, next to the prompt
 
 
 def render_incidents(r: IncidentListResponse) -> RenderableType:
-    return Group(
-        Text("open", style="bold"),
+    return Group(                                        # the open ones last, next to the prompt
+        Text("recently closed", style="bold"),
+        render_incidents_table(list(reversed(r.recently_closed))) if r.recently_closed else "none",
+        heading("open"),
         render_incidents_table(r.open) if r.open else "none",
-        heading("recently closed"),
-        render_incidents_table(r.recently_closed) if r.recently_closed else "none",
     )
 
 

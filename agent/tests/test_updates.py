@@ -179,45 +179,46 @@ def test_a_real_file_in_the_default_dir_is_refused_and_left_alone(tmp_path: Path
     assert (tmp_path / "etc/defaults/top.conf").read_text() == "real file"
 
 
-def test_a_newer_version_removes_only_its_stale_default_links(tmp_path: Path) -> None:
+def test_a_newer_version_removes_the_default_links_it_no_longer_has(tmp_path: Path) -> None:
     old = zip_bytes({"vision/model.bin": b"m", "spam/rules.txt": b"r", "keep.conf": b"2", "gone.conf": b"2"})
     new = zip_bytes({"vision/model.bin": b"m", "spam/rules.txt": b"r", "keep.conf": b"3"})
     defaults = tmp_path / "etc/defaults"
     defaults.mkdir(parents=True)
     (defaults / "mine.conf").write_text("real file")              # a real file: never touched
     (tmp_path / "elsewhere.conf").write_text("other")
-    (defaults / "other.conf").symlink_to(tmp_path / "elsewhere.conf")   # a link outside bundle_dir: never touched
+    (defaults / "other.conf").symlink_to(tmp_path / "elsewhere.conf")   # any other link: removed too
     m = manager(tmp_path, serve({"/2": old, "/3": new}), default_dir=DEFAULTS)
 
     asyncio.run(m.download("http://fs/2", sha(old), "job_2"))
     assert (defaults / "gone.conf").is_symlink()
     asyncio.run(m.download("http://fs/3", sha(new), "job_3"))
 
-    assert sorted(p.name for p in defaults.iterdir()) == ["keep.conf", "mine.conf", "other.conf"]
+    assert sorted(p.name for p in defaults.iterdir()) == ["keep.conf", "mine.conf"]
     assert (defaults / "keep.conf").read_text() == "3"
     assert (defaults / "mine.conf").read_text() == "real file"
-    assert (defaults / "other.conf").read_text() == "other"
+    assert (tmp_path / "elsewhere.conf").read_text() == "other"   # its target stays
 
 
-def test_a_removed_mapping_entry_loses_its_link_anywhere_under_etc(tmp_path: Path) -> None:
+def test_every_other_symlink_under_etc_is_removed(tmp_path: Path) -> None:
     data = bundle("job_2")
     m = manager(tmp_path, serve({"/a": data}))
     asyncio.run(m.download("http://fs/a", sha(data), "job_2"))
-    stale = tmp_path / "etc/old/place/model.bin"                 # what a removed mapping entry left behind
-    stale.parent.mkdir(parents=True)
-    stale.symlink_to(tmp_path / "update_bundle/job_2/vision/model.bin")
+    old = tmp_path / "etc/old/place/model.bin"                   # an old link into the bundle folder
+    old.parent.mkdir(parents=True)
+    old.symlink_to(tmp_path / "update_bundle/job_2/vision/model.bin")
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere/file.conf").write_text("x")
+    (tmp_path / "elsewhere/inner.conf").write_text("y")
+    (tmp_path / "etc/elsewhere.conf").symlink_to(tmp_path / "elsewhere/file.conf")   # points elsewhere
+    (tmp_path / "etc/linked_folder").symlink_to(tmp_path / "elsewhere")               # a link to a folder
     (tmp_path / "etc/real.conf").write_text("real")
-    (tmp_path / "outside").mkdir()
-    (tmp_path / "outside/inner.bin").symlink_to(tmp_path / "update_bundle/job_2/vision/model.bin")
-    (tmp_path / "etc/linked_folder").symlink_to(tmp_path / "outside")   # not followed
 
     asyncio.run(m.download("http://fs/a", sha(data), "job_2"))
 
-    assert not stale.exists() and not stale.is_symlink()
-    assert (tmp_path / "etc/vision/model.bin").is_symlink()            # in the plan: kept
+    links = sorted(p.relative_to(tmp_path / "etc").as_posix() for p in (tmp_path / "etc").rglob("*") if p.is_symlink())
+    assert links == ["routers/spam/rules.txt", "vision/model.bin"]  # exactly the bundle's links
     assert (tmp_path / "etc/real.conf").read_text() == "real"
-    assert (tmp_path / "etc/linked_folder").is_symlink()               # points elsewhere: kept
-    assert (tmp_path / "outside/inner.bin").is_symlink()               # outside etc: never reached
+    assert (tmp_path / "elsewhere/inner.conf").read_text() == "y"   # the linked folder's files survive
 
 
 def test_without_a_default_dir_unmapped_files_are_not_linked(tmp_path: Path) -> None:
