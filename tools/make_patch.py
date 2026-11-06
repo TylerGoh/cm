@@ -91,6 +91,13 @@ def readme(frm: str, to: str, folders: list[str], subjects: list[str]) -> str:
         "",
         *[f"  {s}" for s in subjects],
         "",
+        "All at once, on your prepared install folder (the one holding config.yaml):",
+        "       bash apply.sh /path/to/cluster_manager",
+        "   It prepares this patch with that folder's config.yaml, checks every service, and applies",
+        "   them all, or changes nothing if any check fails (--force replaces locally changed files).",
+        "   Then commit and push the result.",
+        "",
+        "Or by hand, one box at a time:",
         "1. Copy your config.yaml into this folder (next to prepare.py) and run:",
         "       python3 prepare.py",
         "   It renames the terms and writes the generated code in every folder below, and writes",
@@ -111,7 +118,8 @@ def readme(frm: str, to: str, folders: list[str], subjects: list[str]) -> str:
 
 
 APPLY_SH = r'''#!/usr/bin/env bash
-# Applies this folder's patch to an installed folder:   bash apply.sh [--force] TARGET
+# Applies this folder's patch to an installed folder:   bash apply.sh [--force] [--check] TARGET
+# --check: only the checks below; changes nothing, exits 1 if applying would be refused.
 # Run prepare.py (one level up) first. Checks every file in TARGET against old/ (outside the
 # generated blocks) and changes nothing if any differs, unless --force. Backs up what it replaces
 # to TARGET/.patches/<version>/, copies new/ in, removes what DELETED.txt lists, and warns about
@@ -120,10 +128,11 @@ set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 val() { sed -n "s/^$1=//p" "$HERE/PATCH"; }
 SERVICE=$(val service); FROM=$(val from); TO=$(val to); MARKER=$(val marker)
-FORCE=0; TARGET=""
+FORCE=0; CHECK=0; TARGET=""
 for arg in "$@"; do
   case "$arg" in
     --force) FORCE=1 ;;
+    --check) CHECK=1 ;;
     -*) echo "usage: bash apply.sh [--force] TARGET" >&2; exit 2 ;;
     *) TARGET=$arg ;;
   esac
@@ -158,6 +167,7 @@ if [[ ${#DIFFER[@]} -gt 0 ]]; then
   if [[ $FORCE -eq 0 ]]; then echo "nothing changed; --force replaces them (backed up)" >&2; exit 1; fi
   echo "--force: replacing them" >&2
 fi
+if [[ $CHECK -eq 1 ]]; then echo "  ok to apply"; exit 0; fi
 
 BACKUP="$TARGET/.patches/$TO"
 for rel in "${OLD[@]}" "${NEW[@]}" "${GONE[@]}"; do
@@ -192,6 +202,63 @@ echo "$SERVICE $TO applied; old files are in $BACKUP."
 '''
 
 
+APPLY_ALL_SH = r'''#!/usr/bin/env bash
+# Applies the whole patch to a prepared install folder (the one holding prepare.py, config.yaml,
+# agent/, cluster-manager/, file-server/), in one go:   bash apply.sh [--force] INSTALL_FOLDER
+# 1. Prepares this patch with INSTALL_FOLDER/config.yaml (or a config.yaml already here), unless
+#    it's prepared already. Needs python3 with pyyaml and pydantic ($PYTHON to choose another).
+# 2. Checks every service folder first; if any would be refused, nothing changes (--force
+#    replaces locally changed files, backed up).
+# 3. Applies each one; a service folder missing from INSTALL_FOLDER is skipped.
+# Then commit the result in your git repositories. .env files are never touched.
+set -euo pipefail
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+PYTHON=${PYTHON:-python3}
+FORCE=(); TARGET=""
+for arg in "$@"; do
+  case "$arg" in
+    --force) FORCE=(--force) ;;
+    -*) echo "usage: bash apply.sh [--force] INSTALL_FOLDER" >&2; exit 2 ;;
+    *) TARGET=$arg ;;
+  esac
+done
+[[ -n "$TARGET" ]] || { echo "usage: bash apply.sh [--force] INSTALL_FOLDER" >&2; exit 2; }
+ROOT=$(cd "$TARGET" && pwd)
+[[ -f "$ROOT/prepare.py" ]] || { echo "$ROOT has no prepare.py: it isn't an install folder" >&2; exit 1; }
+TO=$(sed -n 's/^to=//p' "$HERE/PATCH")
+
+if [[ ! -f "$HERE/PREPARED" ]]; then
+  if [[ ! -f "$HERE/config.yaml" ]]; then
+    [[ -f "$ROOT/config.yaml" ]] || { echo "no config.yaml in $ROOT or $HERE" >&2; exit 1; }
+    cp "$ROOT/config.yaml" "$HERE/config.yaml"
+  fi
+  "$PYTHON" "$HERE/prepare.py"
+fi
+
+target_of() { if [[ "$1" == root ]]; then echo "$ROOT"; else echo "$ROOT/$1"; fi; }
+FOLDERS=()
+for dir in "$HERE"/*/; do
+  folder=$(basename "$dir")
+  [[ -f "$dir/apply.sh" ]] || continue
+  if [[ ! -d "$(target_of "$folder")" ]]; then echo "skip $folder: no $folder/ in $ROOT"; continue; fi
+  FOLDERS+=("$folder")
+done
+
+echo "== checking"
+FAILED=0
+for folder in "${FOLDERS[@]}"; do
+  bash "$HERE/$folder/apply.sh" --check "${FORCE[@]}" "$(target_of "$folder")" || FAILED=1
+done
+if [[ $FAILED -ne 0 ]]; then echo "nothing changed" >&2; exit 1; fi
+
+echo "== applying"
+for folder in "${FOLDERS[@]}"; do
+  bash "$HERE/$folder/apply.sh" "${FORCE[@]}" "$(target_of "$folder")"
+done
+echo "$TO applied to $ROOT. Commit it (git status shows what changed), then deploy and restart."
+'''
+
+
 def build_patch(frm: str, to: str) -> Path:
     subjects = git("log", "--format=%s", f"{frm}..{to}").decode().strip().splitlines()
     by_folder: dict[str, list[str]] = {}
@@ -206,6 +273,7 @@ def build_patch(frm: str, to: str) -> Path:
         add(z, f"{top}/config.example.yaml", blob(to, "config.example.yaml") or b"")
         add(z, f"{top}/README.txt", readme(frm, to, folders, subjects).encode())
         add(z, f"{top}/PATCH", f"from={frm}\nto={to}\n".encode())
+        add(z, f"{top}/apply.sh", APPLY_ALL_SH.encode(), 0o755)
         for folder in folders:
             marker = ROOT_MARKER if folder == "root" else SERVICES[folder]
             add(z, f"{top}/{folder}/PATCH",

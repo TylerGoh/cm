@@ -14,3 +14,6 @@ venv/
 
 # live settings; .env.example is committed
 .env
+
+# patch backups (git keeps the history)
+.patches/

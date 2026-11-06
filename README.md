@@ -57,16 +57,26 @@ python3 tools/make_patch.py        # commit first; tags HEAD v<N+1>, writes dist
 git push origin v<N+1>
 ```
 
-The patch zip holds `prepare.py`, a `README.txt` with the steps, and one folder per service that
-changed (`root/` for the top level), each with `old/` and `new/` copies and an `apply.sh`:
+The patch zip holds `prepare.py`, an `apply.sh`, a `README.txt` with the steps, and one folder
+per service that changed (`root/` for the top level), each with `old/` and `new/` copies and its
+own `apply.sh`.
 
-1. Copy your `config.yaml` into the unzipped patch and run `python3 prepare.py`: it renames and
-   generates in the copies, and writes the `.env` of each service there for reference.
-2. Copy each folder to its box and run `bash apply.sh /opt/<service>`. It checks every file is
-   still at the previous version (outside the generated blocks) and changes nothing if one
-   isn't (`--force` replaces it), backs up to `/opt/<service>/.patches/vN/`, copies the new
-   files in, and lists `.env` keys added or no longer used. It never touches a `.env`.
-3. Restart the patched services.
+**All at once, on your prepared install folder** (kept in git, with `config.yaml` in it):
+
+```bash
+bash cluster_manager-v<N>-patch/apply.sh ~/cluster_manager   # --force replaces locally changed files
+cd ~/cluster_manager && git status && git commit -am v<N>     # then push and deploy each service
+```
+
+It prepares the patch with that folder's `config.yaml`, checks every service folder against the
+previous version (outside the generated blocks), and applies them all, or changes nothing if any
+check fails. `config.yaml`, `PREPARED`, the `.env` files and the `.patches/` backups are
+git-ignored, so `git status` shows only the patch.
+
+**Or one box at a time:** copy your `config.yaml` into the unzipped patch, run
+`python3 prepare.py`, copy each folder to its box and run `bash apply.sh /opt/<service>`. It
+backs up to `/opt/<service>/.patches/vN/` and lists `.env` keys added or no longer used. It never
+touches a `.env`. Restart the patched services.
 
 The agent's generated files travel with every agent patch, so a changed `config.yaml` reaches
 the boxes with the next patch.
