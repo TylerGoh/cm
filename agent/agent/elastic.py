@@ -39,9 +39,8 @@ class ElasticClient:
 
     async def _index(self, index: str, doc: dict[str, object]) -> None:
         body = dict(doc)
-        body["host"] = self._host.hostname
+        body["hostname"] = self._host.hostname
         body["ipv4"] = str(self._host.ipv4)
-        body["location"] = self._host.location
         try:
             response = await self._client.post(f"/{index}/_doc", json=body)
             response.raise_for_status()

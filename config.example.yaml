@@ -1,0 +1,103 @@
+# config.yaml: your names and your worker, for prepare.py. Keep your own copy (it's never in the
+# repo) and copy it next to prepare.py in the initial install and in every patch:
+#   cp ~/config.yaml cluster_manager/ && python3 cluster_manager/prepare.py
+# One config.yaml serves every install and every patch. Keys a release doesn't know are skipped
+# with a warning, so it can carry keys for newer releases.
+# These example values reproduce the files as they are in the repo.
+
+# --- rename: placeholder -> your name (snake_case) ---
+# Every form is renamed, inside files and in file and folder names:
+#   snake_case    hypertree_dir     -> route_map_dir
+#   UPPER_CASE    HYPERTREE_DIR     -> ROUTE_MAP_DIR        (.env keys)
+#   CamelCase     ProgramLog        -> AppLog
+#   words         program log       -> app log              (comments and docs)
+#   Capitalised   Program log       -> App log
+# Matches inside longer names are renamed too (fetch_hypertree, hypertrees, reload_phase1).
+# Placeholders: hypertree, program_log, reload_phase (the code's reload_phase1()/reload_phase2(),
+# RELOAD_PHASE1_COMMAND, ...), etc_dir. Leave one out to keep it.
+# Renaming hypertree changes the agent <-> daemon wire and the file server's paths: every
+# service must be prepared with the same config.yaml.
+rename: {}
+#   hypertree: route_map
+#   program_log: app_log
+#   reload_phase: reload_bind
+
+# --- worker: the worker's commands and metrics (the worker contract in agent/agent/worker_client.py) ---
+# Every command is appended as-is to the agent's WORKER_URL, which ends where the command name goes
+# (for example http://127.0.0.1:9000/api?command=), so a command has no leading slash. A command
+# may contain spaces (sent as %20).
+# Every command is a format string: {config.<setting>} becomes that agent .env setting, in lower
+# case, when the request is made, e.g.
+#   reload_phase2_command: "reload_app_phase2{config.etc_dir}"   -> reload_app_phase2/srv/worker/etc
+# prepare.py refuses a setting the agent doesn't have. Write a literal brace as {{ or }}.
+# Commands are values: they're never renamed.
+worker:
+  version_command: show_version          # answers {"version": "..."}; also the health ping
+  reload_phase1_command: reload_phase1   # GET, no body, blocks until phase 1 is done
+  reload_phase2_command: reload_phase2   # GET, no body, blocks until the worker runs the new code
+
+  # Each endpoint is a command that answers one flat JSON object; one may mix counters and gauges.
+  #   name         its key in the endpoint's JSON, exactly as the worker sends it
+  #   field        its name in Elastic's metrics documents and in WorkerMetrics (snake_case), which
+  #                agent/agent/performance.py reads; not one of at, running_version, updating,
+  #                hostname, ipv4
+  #   type         counter (cumulative since the worker started) or gauge (a current value)
+  #   description  optional; a comment after the field
+  # An endpoint's Python name comes from its command (stats.queue -> STATS_QUEUE_ENDPOINT); give
+  # `constant: SOME_NAME_ENDPOINT` to choose it. Every field and every name is unique.
+  # Changing a field means changing performance.py's judge() too: see docs/worker-contract.md.
+  endpoints:
+    - command: counters
+      metrics:
+        - name: requests.out.total
+          field: requests_out_total
+          type: counter
+          description: sent out
+        - name: requests.old_failed.total
+          field: requests_old_failed_total
+          type: counter
+          description: failed because too old
+        - name: requests.out_lagged.total
+          field: requests_out_lagged_total
+          type: counter
+          description: failed because lagged
+
+# --- inventory: the agent's record to Elastic's host index, every INVENTORY_INTERVAL ---
+# Every record already has at, hostname and ipv4; these fields are added. Each field has either
+#   source:  a value from the agent: process_status, updating, running_version, busy
+#   env:     an agent .env key. An existing one (ETC_DIR, HOSTNAME, ...) is sent as it is; a new
+#            one is added to agent/config.py and agent/.env.example, so every agent .env must
+#            have it. type: str (default), int, float or bool.
+# Leave the whole section out for the three fields below.
+inventory:
+  fields:
+    - {field: process_status, source: process_status, description: None while not attached}
+    - {field: updating, source: updating}
+    - {field: running_version, source: running_version, description: None unless RUNNING}
+#   - {field: location, env: LOCATION}
+#   - {field: rack, env: RACK, type: int, description: rack number}
+
+# --- env: values for each service's .env ---
+# prepare.py writes agent/.env, cluster-manager/.env, file-server/.env and
+# cluster-manager/deploy/postgres.env from their .env.example (in a patch: at the top of each
+# service's folder), each value from here, and leaves every key not given here empty to fill in.
+# It runs after the renames and after the inventory settings are added, so the template has every
+# key this release needs (new env: inventory fields included). Write a key in its renamed form or
+# its placeholder form (HYPERTREE_DIR or ROUTE_MAP_DIR). A key the example doesn't have is skipped
+# with a warning. Values that differ per box (IPV4, HOSTNAME) are best left out and filled per box.
+# Lists and objects (WORKER_COMMAND, BUNDLE_SYMLINK_MAPPING) are written as JSON.
+# This holds passwords and keys: keep config.yaml private. The .env files are written chmod 600.
+env: {}
+#   agent:
+#     PORT: 8100
+#     LOG_LEVEL: INFO
+#     WORKER_COMMAND: ["/opt/worker/bin/worker", "--flag-a"]
+#     BUNDLE_SYMLINK_MAPPING: {"vision/model.bin": "vision/model.bin"}
+#     RACK: 7
+#   cluster-manager:
+#     PORT: 8000
+#     DATABASE_URL: postgresql+asyncpg://cluster_manager:secret@127.0.0.1:5432/cluster_manager
+#   file-server:
+#     FILE_SERVER_PORT: 8080
+#   postgres:
+#     POSTGRESQL_PASSWORD: secret

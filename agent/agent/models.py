@@ -13,7 +13,6 @@ class HostInfo:
     Nothing in the agent looks it up from the OS."""
     ipv4: IPv4Address
     hostname: str
-    location: str
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,5 +1,8 @@
 import asyncio
 from collections.abc import Callable
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import unquote
 
 import httpx
 import pytest
@@ -13,8 +16,22 @@ type Handler = Callable[[httpx.Request], httpx.Response]
 BASE_URL = "http://worker/api?command="     # the real shape: commands are appended to a query
 
 
+class AnySettings:
+    """Stands in for the agent's config: commands are format strings over its settings
+    (config.yaml decides which), so every setting reads as /<name>."""
+    def __getattr__(self, name: str) -> str:
+        return f"/{name}"
+
+
+SETTINGS = AnySettings()
+
+
+def filled(command: str) -> str:
+    return command.format(config=SETTINGS)
+
+
 def client(handler: Handler) -> WorkerClient:
-    return WorkerClient(BASE_URL, timeout=2.0, reload_timeout=30.0,
+    return WorkerClient(BASE_URL, timeout=2.0, reload_timeout=30.0, settings=SETTINGS,
                         transport=httpx.MockTransport(handler))
 
 
@@ -22,11 +39,11 @@ def command_of(request: httpx.Request) -> str:
     """The command a request was for: everything after the base URL."""
     url = str(request.url)
     assert url.startswith(BASE_URL), url
-    return url.removeprefix(BASE_URL)
+    return unquote(url.removeprefix(BASE_URL))
 
 
 def full_payloads() -> dict[str, dict[str, object]]:
-    return {command: {name: 1.0 for name in names} for command, names in METRIC_SOURCES.items()}
+    return {filled(command): {name: 1.0 for name in names} for command, names in METRIC_SOURCES.items()}
 
 
 def serve(payloads: dict[str, dict[str, object]]) -> Handler:
@@ -50,7 +67,7 @@ def test_command_is_appended_to_the_base_url_as_is():
         return httpx.Response(200, json={"version": "1.2.3"})
 
     asyncio.run(client(handler).version())
-    assert seen == [BASE_URL + VERSION_COMMAND]
+    assert seen == [BASE_URL + filled(VERSION_COMMAND)]
 
 
 # --- metrics ---
@@ -146,7 +163,7 @@ def test_reload_phases_are_gets_to_their_commands():
     c = client(handler)
     asyncio.run(c.reload_phase1())
     asyncio.run(c.reload_phase2())
-    assert seen == [("GET", RELOAD_PHASE1_COMMAND), ("GET", RELOAD_PHASE2_COMMAND)]
+    assert seen == [("GET", filled(RELOAD_PHASE1_COMMAND)), ("GET", filled(RELOAD_PHASE2_COMMAND))]
 
 
 def test_reload_raises_with_the_workers_explanation():
@@ -158,3 +175,18 @@ def test_reload_raises_with_the_workers_explanation():
 def test_reload_raises_on_network_failure():
     with pytest.raises(httpx.ConnectError):
         asyncio.run(client(refuse).reload_phase2())
+
+
+def test_commands_are_filled_from_the_settings():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200)
+
+    c = WorkerClient(BASE_URL, timeout=2.0, reload_timeout=30.0,
+                     settings=SimpleNamespace(etc_dir=Path("/srv/worker/etc")),
+                     transport=httpx.MockTransport(handler))
+    asyncio.run(c._command("reload_app_phase2{config.etc_dir}"))
+    asyncio.run(c._command("literal{{braces}}"))
+    assert seen == [BASE_URL + "reload_app_phase2/srv/worker/etc", BASE_URL + "literal{braces}"]

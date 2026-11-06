@@ -1,2 +1,6 @@
 dist/
 __pycache__/
+# prepare.py: your config and what it writes
+config.yaml
+PREPARED
+postgres.env

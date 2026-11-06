@@ -32,7 +32,6 @@ class AgentConfig(BaseSettings):
     # host identity, set upstream by Foreman
     ipv4: IPv4Address                    # the agent's identity in every heartbeat
     hostname: str
-    location: str
 
     # server (__main__); it always binds 0.0.0.0
     port: int
@@ -89,6 +88,9 @@ class AgentConfig(BaseSettings):
     elastic_metrics_index: str
     elastic_host_index: str              # inventory records and the agent_started record
     elastic_timeout: float               # short: the start record is awaited during startup
+
+    # --- BEGIN generated: inventory settings (prepare.py, from config.yaml's inventory env: fields) ---
+    # --- END generated: inventory settings ---
 
 
 if not ENV_FILE.exists():

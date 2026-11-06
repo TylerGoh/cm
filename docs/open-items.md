@@ -22,7 +22,7 @@ The three projects are split, installed by hand from their READMEs, and kept in 
 
 Both are written out (2026-11-04 entries). Still open:
 
-- The worker's real paths and metrics aren't in the code yet; the contract block is still the mock one, to be regenerated with `tools/metrics_generator` (the reload phases are confirmed as blocking GETs with no body).
+- The worker's real paths and metrics aren't in the code yet; the contract block is still the mock one, to be generated from the owner's `config.yaml` by `prepare.py` (the reload phases are confirmed as blocking GETs with no body).
 - `download` swaps the `etc_dir` links one by one, not as a set: an agent that dies part-way leaves some links on the new bundle and some on the old until the next `download`.
 - Unpacking drops Unix permissions. Nothing in a bundle can rely on an executable bit.
 - Old console logs are never deleted by the agent; `/tmp` cleaning bounds them.

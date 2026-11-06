@@ -1,0 +1,136 @@
+"""prepare.py on a copy of this repository. Needs pyyaml and pydantic.
+Run from the repository: python -m pytest tools/tests"""
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO))
+import prepare  # noqa: E402
+
+EXAMPLE = yaml.safe_load((REPO / "config.example.yaml").read_text())
+
+
+def tree(tmp_path: Path) -> Path:
+    files = subprocess.run(["git", "-C", str(REPO), "ls-files", "-co", "--exclude-standard"],
+                           check=True, capture_output=True, text=True).stdout.split()
+    root = tmp_path / "cluster_manager"
+    for rel in files:
+        if rel.startswith("dist/") or not (REPO / rel).is_file():
+            continue
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(REPO / rel, root / rel)
+    return root
+
+
+def run(root: Path, config: dict, *args: str) -> subprocess.CompletedProcess[str]:
+    (root / "config.yaml").write_text(yaml.safe_dump(config))
+    return subprocess.run([sys.executable, str(root / "prepare.py"), *args],
+                          capture_output=True, text=True)
+
+
+def renamed_config(**changes) -> dict:
+    config = yaml.safe_load(yaml.safe_dump(EXAMPLE))
+    config["rename"] = {"hypertree": "route_map", "program_log": "app_log", "reload_phase": "reload_bind"}
+    config.update(changes)
+    return config
+
+
+def test_forms():
+    assert prepare.forms("program_log") == ["program_log", "PROGRAM_LOG", "ProgramLog", "program log", "Program log"]
+    rename = prepare.Renamer({"hypertree": "route_map", "reload_phase": "reload_bind"})
+    assert rename("fetch_hypertree HYPERTREE_DIR Hypertrees reload_phase1() RELOAD_PHASE2_COMMAND") == \
+        "fetch_route_map ROUTE_MAP_DIR RouteMaps reload_bind1() RELOAD_BIND2_COMMAND"
+
+
+def test_example_config_reproduces_the_repo(tmp_path):
+    root = tree(tmp_path)
+    result = run(root, EXAMPLE)
+    assert result.returncode == 0, result.stderr
+    for rel in ["agent/agent/worker_client.py", "agent/agent/inventory.py", "agent/config.py", "agent/.env.example"]:
+        assert (root / rel).read_text() == (REPO / rel).read_text(), rel
+
+
+def test_renames_everything_and_runs_again(tmp_path):
+    root = tree(tmp_path)
+    assert run(root, renamed_config()).returncode == 0
+    leftovers = [p for p in root.rglob("*") if p.is_file() and p.name not in prepare.SKIP_FILES
+                 and "PROGRAM_LOG" in p.read_text(errors="ignore")]
+    assert leftovers == []
+    client = (root / "agent/agent/worker_client.py").read_text()
+    assert "async def reload_bind1" in client and "RELOAD_BIND2_COMMAND" in client
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    assert run(root, renamed_config()).returncode == 0
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
+
+
+def test_other_names_on_a_prepared_folder_are_refused(tmp_path):
+    root = tree(tmp_path)
+    assert run(root, renamed_config()).returncode == 0
+    other = renamed_config()
+    other["rename"]["hypertree"] = "mesh"
+    result = run(root, other)
+    assert result.returncode != 0 and "fresh unzip" in result.stderr
+
+
+def test_command_fields_are_checked_and_renamed(tmp_path):
+    root = tree(tmp_path)
+    config = renamed_config()
+    config["worker"]["reload_phase2_command"] = "reload_app_phase2{config.hypertree_dir}"
+    assert run(root, config).returncode == 0
+    assert 'RELOAD_BIND2_COMMAND = "reload_app_phase2{config.route_map_dir}"' in \
+        (root / "agent/agent/worker_client.py").read_text()
+
+    config["worker"]["reload_phase2_command"] = "reload_app_phase2{config.no_such_dir}"
+    result = run(tree(tmp_path / "b"), config)
+    assert result.returncode != 0 and "no_such_dir" in result.stderr
+
+
+@pytest.mark.parametrize("command", ["/leading", "stray{brace", "x{other.etc_dir}"])
+def test_bad_commands_change_nothing(tmp_path, command):
+    root = tree(tmp_path)
+    config = renamed_config()
+    config["worker"]["reload_phase1_command"] = command
+    result = run(root, config)
+    assert result.returncode != 0
+    assert "hypertree" in (root / "agent/config.py").read_text()        # nothing renamed
+
+
+def test_unknown_keys_are_skipped_with_a_warning(tmp_path):
+    config = renamed_config(future={"x": 1})
+    config["rename"]["future_term"] = "x"
+    result = run(tree(tmp_path), config)
+    assert result.returncode == 0, result.stderr
+    assert "future is not known" in result.stderr and "future_term" in result.stderr
+
+
+def test_inventory_env_fields_become_settings_and_env_lines(tmp_path):
+    root = tree(tmp_path)
+    config = renamed_config()
+    config["inventory"] = {"fields": [{"field": "state", "source": "process_status"},
+                                      {"field": "rack", "env": "RACK", "type": "int"},
+                                      {"field": "tree", "env": "HYPERTREE_DIR"}]}
+    config["env"] = {"agent": {"RACK": 7, "HYPERTREE_DIR": "/srv/tree", "WORKER_COMMAND": ["/w", "-a"],
+                               "LOG_FORMAT": "%(asctime)s %(message)s"}}
+    assert run(root, config).returncode == 0
+    assert "    rack: int" in (root / "agent/config.py").read_text()
+    inventory = (root / "agent/agent/inventory.py").read_text()
+    assert 'SettingField("tree", "route_map_dir")' in inventory and 'FeedField("state", "process_status")' in inventory
+    env = (root / "agent/.env").read_text()
+    assert "\nRACK=7\n" in env and "\nROUTE_MAP_DIR=/srv/tree\n" in env
+    assert "\nWORKER_COMMAND='[\"/w\", \"-a\"]'\n" in env
+    assert '\nLOG_FORMAT="%(asctime)s %(message)s"\n' in env
+    assert "\nIPV4=\n" in env                                           # left to fill in
+    assert (root / "agent/.env").stat().st_mode & 0o777 == 0o600
+    assert (root / "file-server/.env").exists() and (root / "cluster-manager/deploy/postgres.env").exists()
+
+
+def test_check_changes_nothing(tmp_path):
+    root = tree(tmp_path)
+    result = run(root, renamed_config(), "--check")
+    assert result.returncode == 0
+    assert not (root / "PREPARED").exists() and "hypertree" in (root / "agent/config.py").read_text()

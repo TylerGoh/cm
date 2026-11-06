@@ -11,9 +11,9 @@ from agent.worker_client import WorkerClient, WorkerMetrics
 log = logging.getLogger("agent.metrics_exporter")
 
 # Keys every metrics document carries besides the metric fields: these three from here, and
-# host, ipv4 and location from ElasticClient. No WorkerMetrics field may use one of them;
-# tools/metrics_generator refuses them, and so does the constructor.
-DOCUMENT_KEYS = frozenset({"at", "running_version", "updating", "host", "ipv4", "location"})
+# hostname and ipv4 from ElasticClient. No WorkerMetrics field may use one of them; prepare.py
+# refuses them, and so does the constructor.
+DOCUMENT_KEYS = frozenset({"at", "running_version", "updating", "hostname", "ipv4"})
 
 
 class MetricsExporter:

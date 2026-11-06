@@ -165,7 +165,7 @@ Cost: nothing checks the base URL's shape; one that ends in the wrong place send
 A missing metric name is logged once, and again only after a complete reading (2026-11-05).
 
 **The worker contract is generated from YAML; the judgement is hand-written (2026-11-05).**
-`tools/metrics_generator` turns a YAML description of the worker (paths, endpoints, each metric's name, field and counter/gauge type) into the block between the markers in `worker_client.py`. An endpoint may mix counters and gauges. The performance judgement in `performance.py` (renamed from `metrics.py`) is coded by the owner, from the sample in the generator's README.
+A YAML description of the worker (paths, endpoints, each metric's name, field and counter/gauge type) becomes the block between the markers in `worker_client.py`; since 2026-11-06 that is `config.yaml`'s `worker:` section, applied by `prepare.py`. An endpoint may mix counters and gauges. The performance judgement in `performance.py` (renamed from `metrics.py`) is coded by the owner, from the sample in `docs/worker-contract.md`.
 Why: the contract is pure description, so a generator keeps it consistent; the judgement is policy, which the owner wants to write himself.
 
 ## Elastic
@@ -175,7 +175,7 @@ Why: the contract is pure description, so a generator keeps it consistent; the j
 **The worker's metrics are exported on their own interval, under their field names (2026-11-05).**
 A metrics exporter loop sends one document per `METRICS_EXPORT_INTERVAL` while the worker is RUNNING: the reading's fields, plus `at`, `running_version`, `updating` and the host fields. Counters go cumulative. A metric has two names only: the intake name (the worker's JSON key, the `validation_alias`) and the field name, which is also its Elastic name.
 Why: the owner wants the raw metrics in Elastic on a fixed cadence; the worker's dotted names would become nested objects in Elastic, so they stay on the intake side.
-**Two indexes, metrics and host;** the client adds `host`, `ipv4`, `location` to every document. TLS uses the CA in `elastic.cert`; a missing cert fails startup.
+**Two indexes, metrics and host;** the client adds `hostname` and `ipv4` to every document (`host` became `hostname` and `location` was dropped on 2026-11-06; a location is now an inventory `env:` field if wanted). TLS uses the CA in `elastic.cert`; a missing cert fails startup.
 
 **Elastic requests authenticate with an API key** (2026-11-05).
 `config.elastic_api_key` (a `SecretStr`) is sent on every request as `Authorization: ApiKey <key>`, the encoded key as Elastic issues it. TLS verification against `elastic.cert` stays.
@@ -189,7 +189,7 @@ Cost: a wrong or revoked key only shows as logged write failures (401), since El
 - Fixed 10s tick, 20s shutdown grace, `TimeoutStopSec=40`.
 - `_set_memory` saves before updating memory and takes typed changes (`AgentMemoryChanges`).
 - Settings come only from `.env`: no prefix, environment ignored, unknown keys rejected. Everything binds `0.0.0.0`.
-- Host identity (IPv4, hostname, location) comes from config, written by Foreman.
+- Host identity (IPv4, hostname) comes from config, written by Foreman.
 
 ## Wire
 
@@ -269,9 +269,13 @@ Why: one rule for all three, and a foreground run needs nothing exported.
 The docs live in its `docs/`. A release zip is `git archive` of a commit.
 Why: moves, renames and small edits are cheap in git and expensive as whole-document rewrites in the claude.ai project.
 
-**`rename_term.sh` is a fixed checklist of placeholders (2026-11-05).**
-Only `hypertree`, `etc_dir` and `program_log` can be renamed: the owner fills in each real name at the top of the script and runs it once, on a fresh copy. Each is renamed in every form across the three projects.
+**`rename_term.sh` is a fixed checklist of placeholders (2026-11-05; replaced 2026-11-06).**
+Only `hypertree`, `etc_dir` and `program_log` could be renamed: the owner filled in each real name at the top of the script and ran it once, on a fresh copy.
 Why: renaming any term typed on the command line was too loose; the checklist records exactly which names are placeholders.
+
+**One `config.yaml`, applied by `prepare.py`, drives the initial install and every patch (2026-11-06).**
+The owner keeps one private `config.yaml`: the renames (now also `reload_phase`), the worker contract, the inventory fields (feed values or agent settings, new settings included) and each service's `.env` values. Every zip carries `prepare.py`, which validates it, renames, writes the generated blocks and writes the `.env` files. Commands are format strings over the agent's settings (`reload_app_phase2{config.etc_dir}`). Unknown keys are skipped with a warning. Releases are tags `v0`, `v1`, ...: `cluster_manager-initial.zip` is a full version, and each later version is a patch zip with per-service `old/`/`new/` copies and an `apply.sh` that refuses a box whose files aren't at the previous version (outside the generated blocks) unless `--force`. Version numbering was reset to `v0` at this change.
+Why: the proprietary parts (names, worker contract, what is sent to Elastic, settings) can't be in the repository and were being pasted or renamed by hand on each box; patches that replaced whole files broke on them. One file the owner keeps, applied the same way to a fresh install and to every patch, keeps every box consistent and survives between sessions.
 
 **`check_wire.sh` compares the two `wire.py` copies (2026-11-05).**
 Run by hand before a release; a difference fails with the diff.
