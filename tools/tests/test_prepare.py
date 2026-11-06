@@ -47,6 +47,18 @@ def test_forms():
         "fetch_route_map ROUTE_MAP_DIR RouteMaps reload_bind1() RELOAD_BIND2_COMMAND"
 
 
+@pytest.mark.parametrize("command, constant", [
+    ("counters", "COUNTERS_ENDPOINT"),
+    ("show%20counters", "SHOW_COUNTERS_ENDPOINT"),
+    ("show counters", "SHOW_COUNTERS_ENDPOINT"),
+    ("stats.queue", "STATS_QUEUE_ENDPOINT"),
+    ("show%2Fstats?x={config.etc_dir}", "SHOW_STATS_X_ENDPOINT"),
+])
+def test_endpoint_names_come_from_the_decoded_command(command, constant):
+    endpoint = prepare.EndpointSpec(command=command, metrics=[{"name": "a", "field": "a", "type": "gauge"}])
+    assert prepare.endpoint_constant(endpoint) == constant
+
+
 def test_example_config_reproduces_the_repo(tmp_path):
     root = tree(tmp_path)
     result = run(root, EXAMPLE)

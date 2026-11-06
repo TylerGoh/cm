@@ -26,6 +26,7 @@ import sys
 from enum import StrEnum, auto
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 try:
     import yaml
@@ -377,7 +378,9 @@ def quoted(value: str) -> str:
 def endpoint_constant(endpoint: EndpointSpec) -> str:
     if endpoint.constant is not None:
         return endpoint.constant
-    stem = re.sub(r"[^A-Za-z0-9]+", "_", re.sub(r"\{[^}]*\}", "", endpoint.command)).strip("_").upper()
+    # %20 and the like are decoded first, so show%20counters names like show counters
+    readable = unquote(re.sub(r"\{[^}]*\}", "", endpoint.command))
+    stem = re.sub(r"[^A-Za-z0-9]+", "_", readable).strip("_").upper()
     if not stem or stem[0].isdigit():
         raise SystemExit(f"prepare: can't name {endpoint.command!r} from its command; give it a `constant`")
     return f"{stem}_ENDPOINT"
