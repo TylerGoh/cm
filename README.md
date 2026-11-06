@@ -40,6 +40,22 @@ Install order the first time:
 2. the cluster manager, whose first start fetches `BOOTSTRAP_VERSION` through the file server and fails without it
 3. the agents
 
+## Versions and patches
+
+Releases are numbered v0, v1, v2, ..., one git tag each. v0 is the fresh install: the full zip
+of the `v0` tag. Each later version is a patch from the version before it:
+
+```bash
+python3 tools/make_patch.py        # commit first; tags HEAD v<N+1>, writes dist/cluster_manager-v<N+1>-patch.zip
+git push origin v<N+1>
+```
+
+The zip holds `patch-v<N+1>.sh` and `rename_term.sh`. On each box, unzip it in the home folder and
+run `bash patch-v<N+1>/patch-v<N+1>.sh`, then restart the services. The patch applies the box's
+renamed names (from its `rename_term.sh` checklist) and changes nothing unless every file is
+still at the previous version. It backs up the old files under `<project>/.patches/` and never
+touches `.env` files. `dist/` is git-ignored.
+
 ## Every machine needs
 
 Python 3.12 with `venv`, a pip index (PyPI, or `PIP_INDEX_URL`), and systemd to run the
