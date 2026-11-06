@@ -114,6 +114,8 @@ for path in "${FILES[@]}"; do
   if [[ "${path##*/}" == .env || "${path##*/}" == rename_term.sh ]]; then echo "  keep  $path (never patched)"; continue; fi
   here=$(printf '%s' "$path" | ren); top=${here%%/*}
   if [[ "$here" == */* && ! -d "$ROOT/$top" ]]; then echo "  skip  $here (no $top/ on this box)"; continue; fi
+  # top-level files (README.md, .gitignore) only in a full project, never in a bare home folder
+  if [[ "$here" != */* && ! -f "$ROOT/rename_term.sh" ]]; then echo "  skip  $here (not a full project)"; continue; fi
   have=$(hash_of "$ROOT/$here"); old=$(renamed_hash old "$path"); new=$(renamed_hash new "$path")
   if [[ "$have" == "$new" ]]; then echo "  done  $here (already up to date)"
   elif [[ "$have" == "$old" ]]; then TODO+=("$path")
