@@ -598,36 +598,21 @@ def env_entries(example: str) -> list[tuple[str | None, list[str]]]:
     return entries
 
 
-def write_env(example_path: Path, out_path: Path, values: dict[str, Any], rename: Renamer,
-              section: str) -> list[str]:
-    """Writes out_path from the example: each key's value from config.yaml, or empty to fill in.
-    Returns the keys left empty."""
+def write_env(example_path: Path, out_path: Path, values: dict[str, Any], rename: Renamer) -> None:
+    """Writes out_path from the example, each key's value from config.yaml (check_envs has made
+    sure every key has one)."""
     given = {rename(key): value for key, value in values.items()}
-    entries = env_entries(example_path.read_text())
-    known = {key for key, _ in entries if key}
-    for key in sorted(set(given) - known):
-        warn(f"config.yaml: env.{section}.{key} is not a setting in {example_path.name} here; skipped")
     out: list[str] = []
-    empty: list[str] = []
-    for key, lines in entries:
-        if key is None:
-            out += lines
-        elif key in given:
-            out.append(f"{key}={env_value(given[key])}")
-        else:
-            out.append(f"{key}=")
-            empty.append(key)
+    for key, lines in env_entries(example_path.read_text()):
+        out += lines if key is None else [f"{key}={env_value(given[key])}"]
     out_path.write_text("\n".join(out) + "\n")
     out_path.chmod(0o600)                        # passwords and keys live here
-    return empty
 
 
-def write_envs(root: Path, config: Config, rename: Renamer, patch: bool) -> None:
-    for section in config.env:
-        if section not in ENV_FILES:
-            warn(f"config.yaml: env.{section} is not one of {', '.join(ENV_FILES)}; skipped")
+def env_files(root: Path, patch: bool) -> list[tuple[str, Path, Path]]:
+    """(section, example, .env to write) for each example in this folder."""
+    found = []
     for section, example_rel in ENV_FILES.items():
-        values = config.env.get(section, {})
         if patch:
             folder, _, inner = example_rel.partition("/")
             example = root / folder / "new" / inner
@@ -635,11 +620,46 @@ def write_envs(root: Path, config: Config, rename: Renamer, patch: bool) -> None
         else:
             example = root / example_rel
             out = example.with_name(example.name.removesuffix(".example"))
-        if not example.exists():
+        if example.exists():
+            found.append((section, example, out))
+    return found
+
+
+def check_envs(root: Path, config: Config, settings: set[str], rename: Renamer, patch: bool) -> None:
+    """Every key of every .env this run writes needs a value in config.yaml: a key that's missing,
+    or given with no value (KEY: or KEY: null), stops prepare.py before anything changes. ""
+    is a value: the key is written empty. A section left out of env: writes no .env."""
+    for section in config.env:
+        if section not in ENV_FILES:
+            warn(f"{CONFIG_NAME}: env.{section} is not one of {', '.join(ENV_FILES)}; skipped")
+    problems: list[str] = []
+    for section, example, _ in env_files(root, patch):
+        if section not in config.env:
             continue
-        empty = write_env(example, out, values, rename, section)
-        where = out.relative_to(root.parent)
-        print(f"wrote {where}" + (f"; fill in: {', '.join(empty)}" if empty else ""))
+        needed = {key for key, _ in env_entries(rename(without_blocks(example.read_text()))) if key}
+        if section == "agent":
+            needed |= {f.env for f in new_settings(config.inventory, settings, rename)}
+        given = {rename(key): value for key, value in config.env[section].items()}
+        for key in sorted(set(given) - needed):
+            warn(f"{CONFIG_NAME}: env.{section}.{key} is not a setting of this release; skipped")
+        missing = sorted(needed - set(given))
+        empty = sorted(k for k in needed & set(given) if given[k] is None)
+        if missing:
+            problems.append(f"env.{section} is missing: {', '.join(missing)}")
+        if empty:
+            problems.append(f"env.{section} has no value for: {', '.join(empty)} "
+                            f'(write "" for an empty value)')
+    if problems:
+        raise SystemExit(f"prepare: {CONFIG_NAME}:\n  " + "\n  ".join(problems))
+
+
+def write_envs(root: Path, config: Config, rename: Renamer, patch: bool) -> None:
+    for section, example, out in env_files(root, patch):
+        if section not in config.env:
+            print(f"no env.{section} in {CONFIG_NAME}: {out.relative_to(root.parent)} not written")
+            continue
+        write_env(example, out, config.env[section], rename)
+        print(f"wrote {out.relative_to(root.parent)}")
 
 
 # --- the two layouts ---
@@ -691,6 +711,7 @@ def main(argv: list[str]) -> int:
     settings = {rename(s) for s in agent_settings(config_pys[0])}
     commands = check_worker(config.worker, settings, rename)
     check_inventory(config.inventory, settings, rename)
+    check_envs(root, config, settings, rename, patch=(root / "PATCH").exists())
     print(f"{CONFIG_NAME} is valid: {len(config.worker.endpoints)} metric commands, "
           f"{len(config.inventory.fields)} inventory fields, renames: {renames or 'none'}")
     if check_only:

@@ -32,11 +32,12 @@ keep yourself. It is never in this repository; `config.example.yaml` documents e
    It renames the placeholders (`hypertree`, `program_log`, `reload_phase`, `etc_dir`) to your
    names, writes the worker contract and the inventory fields into the agent, and writes each
    service's `.env` (and `cluster-manager/deploy/postgres.env`) from `config.yaml`'s `env:`
-   values, leaving the rest empty and listing them.
+   values. A section given must have every key: a missing key, or one with no value, stops it
+   before anything changes; `""` writes the key empty (per-box keys like `IPV4`).
 3. **Check the wire.** `./check_wire.sh` confirms the agent's and the daemon's copies of
    `wire.py` are identical. A difference means heartbeats would fail.
-4. **Fill in what's left in each `.env`**, per box: each worker box needs its own agent `.env`
-   (`IPV4`, `HOSTNAME`); where Foreman writes it, leave it out here.
+4. **Fill in the per-box values** you wrote as `""`: each worker box needs its own agent `.env`
+   (`IPV4`, `HOSTNAME`); where Foreman writes it, leave `env.agent` out of `config.yaml`.
 5. **Copy each folder to its machine**, for example `scp -r file-server user@files-host:/opt/`.
 6. **On each machine, follow that folder's README.** Each service runs in the foreground with its
    command first, then as a systemd service.

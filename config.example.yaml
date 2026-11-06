@@ -79,25 +79,37 @@ inventory:
 
 # --- env: values for each service's .env ---
 # prepare.py writes agent/.env, cluster-manager/.env, file-server/.env and
-# cluster-manager/deploy/postgres.env from their .env.example (in a patch: at the top of each
-# service's folder), each value from here, and leaves every key not given here empty to fill in.
-# It runs after the renames and after the inventory settings are added, so the template has every
-# key this release needs (new env: inventory fields included). Write a key in its renamed form or
-# its placeholder form (HYPERTREE_DIR or ROUTE_MAP_DIR). A key the example doesn't have is skipped
-# with a warning. Values that differ per box (IPV4, HOSTNAME) are best left out and filled per box.
-# Lists and objects (WORKER_COMMAND, BUNDLE_SYMLINK_MAPPING) are written as JSON.
+# cluster-manager/deploy/postgres.env (in a patch: at the top of each service's folder) for each
+# section given here, from that service's .env.example. A section left out writes no .env.
+# A section given must have every key of its .env.example, after the renames and with the new
+# inventory env: settings: a missing key, or one with no value (KEY: or KEY: null), stops
+# prepare.py before it changes anything. "" is a value: the key is written empty (for per-box
+# keys like IPV4 and HOSTNAME, filled in on each box, or MATTERMOST_WEBHOOK_URL left off).
+# Write a key in its renamed form or its placeholder form (HYPERTREE_DIR or ROUTE_MAP_DIR). A key
+# the release doesn't have is skipped with a warning. Lists and objects (WORKER_COMMAND,
+# BUNDLE_SYMLINK_MAPPING) are written as JSON.
 # This holds passwords and keys: keep config.yaml private. The .env files are written chmod 600.
 env: {}
 #   agent:
+#     IPV4: ""
+#     HOSTNAME: ""
 #     PORT: 8100
 #     LOG_LEVEL: INFO
 #     WORKER_COMMAND: ["/opt/worker/bin/worker", "--flag-a"]
 #     BUNDLE_SYMLINK_MAPPING: {"vision/model.bin": "vision/model.bin"}
 #     RACK: 7
+#     ... every other key of agent/.env.example
 #   cluster-manager:
 #     PORT: 8000
 #     DATABASE_URL: postgresql+asyncpg://cluster_manager:secret@127.0.0.1:5432/cluster_manager
+#     MATTERMOST_WEBHOOK_URL: ""
+#     ... every other key of cluster-manager/.env.example
 #   file-server:
+#     FILE_SERVER_ROOT: /srv/files
+#     FILE_SERVER_UPSTREAM_TIMEOUT: 600
 #     FILE_SERVER_PORT: 8080
 #   postgres:
+#     POSTGRESQL_USERNAME: cluster_manager
 #     POSTGRESQL_PASSWORD: secret
+#     POSTGRESQL_DATABASE: cluster_manager
+#     POSTGRESQL_POSTGRES_PASSWORD: secret_too

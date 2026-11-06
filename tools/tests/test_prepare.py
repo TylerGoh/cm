@@ -108,25 +108,54 @@ def test_unknown_keys_are_skipped_with_a_warning(tmp_path):
     assert "future is not known" in result.stderr and "future_term" in result.stderr
 
 
+def example_env(section: str) -> dict:
+    """Every key of a service's .env.example, with its example value as text."""
+    path = REPO / prepare.ENV_FILES[section]
+    return {k: "x" for k, _ in prepare.env_entries(prepare.without_blocks(path.read_text())) if k}
+
+
 def test_inventory_env_fields_become_settings_and_env_lines(tmp_path):
     root = tree(tmp_path)
     config = renamed_config()
     config["inventory"] = {"fields": [{"field": "state", "source": "process_status"},
                                       {"field": "rack", "env": "RACK", "type": "int"},
                                       {"field": "tree", "env": "HYPERTREE_DIR"}]}
-    config["env"] = {"agent": {"RACK": 7, "HYPERTREE_DIR": "/srv/tree", "WORKER_COMMAND": ["/w", "-a"],
-                               "LOG_FORMAT": "%(asctime)s %(message)s"}}
-    assert run(root, config).returncode == 0
+    agent = example_env("agent")
+    agent.update({"IPV4": "", "RACK": 7, "HYPERTREE_DIR": "/srv/tree", "WORKER_COMMAND": ["/w", "-a"],
+                  "LOG_FORMAT": "%(asctime)s %(message)s"})
+    config["env"] = {"agent": agent, "file-server": example_env("file-server")}
+    result = run(root, config)
+    assert result.returncode == 0, result.stderr
     assert "    rack: int" in (root / "agent/config.py").read_text()
     inventory = (root / "agent/agent/inventory.py").read_text()
     assert 'SettingField("tree", "route_map_dir")' in inventory and 'FeedField("state", "process_status")' in inventory
     env = (root / "agent/.env").read_text()
-    assert "\nRACK=7\n" in env and "\nROUTE_MAP_DIR=/srv/tree\n" in env
+    assert "\nRACK=7\n" in env and "\nROUTE_MAP_DIR=/srv/tree\n" in env and "\nWORKER_APP_LOG_PATH=x\n" in env
     assert "\nWORKER_COMMAND='[\"/w\", \"-a\"]'\n" in env
     assert '\nLOG_FORMAT="%(asctime)s %(message)s"\n' in env
-    assert "\nIPV4=\n" in env                                           # left to fill in
+    assert "\nIPV4=\n" in env                                           # "" is written empty
     assert (root / "agent/.env").stat().st_mode & 0o777 == 0o600
-    assert (root / "file-server/.env").exists() and (root / "cluster-manager/deploy/postgres.env").exists()
+    assert (root / "file-server/.env").exists()
+    assert not (root / "cluster-manager/.env").exists()                # no env.cluster-manager: not written
+
+
+@pytest.mark.parametrize("change, message", [
+    (lambda env: env.pop("LOG_FORMAT"), "missing: LOG_FORMAT"),
+    (lambda env: env.update(LOG_FORMAT=None), "no value for: LOG_FORMAT"),
+    (lambda env: None, "missing: RACK"),                                 # a new inventory setting
+])
+def test_a_key_without_a_value_changes_nothing(tmp_path, change, message):
+    root = tree(tmp_path)
+    config = renamed_config()
+    config["inventory"] = {"fields": [{"field": "rack", "env": "RACK", "type": "int"}]}
+    agent = example_env("agent")
+    if message != "missing: RACK":
+        agent["RACK"] = 1
+    change(agent)
+    config["env"] = {"agent": agent}
+    result = run(root, config)
+    assert result.returncode != 0 and message in result.stderr
+    assert "hypertree" in (root / "agent/config.py").read_text() and not (root / "agent/.env").exists()
 
 
 def test_check_changes_nothing(tmp_path):
