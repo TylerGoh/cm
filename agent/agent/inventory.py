@@ -76,7 +76,7 @@ class InventoryExporter:
         self._feed = feed
         self._settings = settings
         self._fields = fields
-        self._interval = interval                   # at least one tick; shorter only sends duplicates
+        self._interval = interval                   # at least one heartbeat tick; shorter only sends duplicates
         self._require_running = require_running
 
     async def run(self) -> None:

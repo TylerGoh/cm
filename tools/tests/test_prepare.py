@@ -89,6 +89,43 @@ def test_other_names_on_a_prepared_folder_are_refused(tmp_path):
     assert result.returncode != 0 and "fresh unzip" in result.stderr
 
 
+def test_each_reload_phase_can_have_its_own_name():
+    rename = prepare.Renamer({"reload_phase1": "prepare_bind", "reload_phase2": "switch_bind"})
+    assert rename("reload_phase1() RELOAD_PHASE2_COMMAND ReloadPhase1") == \
+        "prepare_bind() SWITCH_BIND_COMMAND PrepareBind"
+
+
+def test_per_phase_names_win_over_reload_phase(tmp_path):
+    root = tree(tmp_path)
+    config = renamed_config()
+    config["rename"]["reload_phase1"] = "prepare_bind"
+    assert run(root, config).returncode == 0
+    client = (root / "agent/agent/worker_client.py").read_text()
+    assert "async def prepare_bind" in client and "async def reload_bind2" in client
+
+
+def test_a_prepared_folder_takes_new_renames(tmp_path):
+    root = tree(tmp_path)
+    config = renamed_config()
+    del config["rename"]["reload_phase"]
+    assert run(root, config).returncode == 0
+    config["rename"].update(reload_phase1="prepare_bind", reload_phase2="switch_bind")
+    result = run(root, config)
+    assert result.returncode == 0, result.stderr
+    client = (root / "agent/agent/worker_client.py").read_text()
+    assert "async def prepare_bind" in client and "SWITCH_BIND_COMMAND" in client
+    assert "def reload_phase" not in client and "RELOAD_PHASE" not in client   # commands are values, never renamed
+
+
+def test_a_new_rename_overlapping_an_earlier_one_is_refused(tmp_path):
+    root = tree(tmp_path)
+    assert run(root, renamed_config()).returncode == 0
+    config = renamed_config()
+    config["rename"]["reload_phase1"] = "prepare_bind"
+    result = run(root, config)
+    assert result.returncode != 0 and "overlaps rename.reload_phase" in result.stderr
+
+
 def test_command_fields_are_checked_and_renamed(tmp_path):
     root = tree(tmp_path)
     config = renamed_config()

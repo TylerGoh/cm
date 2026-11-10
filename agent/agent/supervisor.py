@@ -75,7 +75,7 @@ class Supervisor:
         self._last_observed: Observed | None = None
         self._sync_failures = 0
 
-    async def tick(self) -> None:
+    async def heartbeat_tick(self) -> None:
         observed = await self._observe()
         self._last_observed = observed
         desired = await self._sync(observed)

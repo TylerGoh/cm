@@ -28,20 +28,19 @@ from agent.worker_client import WorkerClient
 
 log = logging.getLogger("agent")
 
-TICK_INTERVAL = 10.0
 DISTRIBUTION = "agent"                  # the name in pyproject.toml, for agent_version
 
 
-async def tick_loop(supervisor: Supervisor) -> None:
-    """Ticks every TICK_INTERVAL (fixed, no jitter) until cancelled.
+async def heartbeat_loop(supervisor: Supervisor, interval: float) -> None:
+    """One heartbeat tick every `interval` seconds (HEARTBEAT_INTERVAL; fixed, no jitter) until cancelled.
     An exception ends it, and _exit_if_failed stops the process."""
     while True:
-        await supervisor.tick()
-        await asyncio.sleep(TICK_INTERVAL)
+        await supervisor.heartbeat_tick()
+        await asyncio.sleep(interval)
 
 
 def _exit_if_failed(task: asyncio.Task[None]) -> None:
-    """The tick loop died: stop the whole process so systemd restarts the agent."""
+    """The heartbeat loop died: stop the whole process so systemd restarts the agent."""
     if task.cancelled():
         return
     exc = task.exception()
@@ -135,7 +134,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     await _record_start(elastic)                    # before any loop starts
 
-    ticking = asyncio.create_task(tick_loop(supervisor), name="tick")
+    ticking = asyncio.create_task(heartbeat_loop(supervisor, config.heartbeat_interval), name="heartbeat")
     ticking.add_done_callback(_exit_if_failed)
     background = [
         asyncio.create_task(health.run(), name="health"),

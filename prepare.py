@@ -5,13 +5,16 @@ blocks (the worker contract, the inventory fields and their agent settings).
     cp /path/to/your/config.yaml .      # next to this script
     python3 prepare.py                  # needs pyyaml and pydantic (pip install pyyaml pydantic)
     python3 prepare.py --check          # validates config.yaml, changes nothing
+    python3 prepare.py --renames-of DIR # renames as DIR was prepared, not as config.yaml says
+                                        # (the patch's apply.sh uses it on the install folder)
 
 It works on both kinds of folder it ships in:
-  - the initial install (cluster_manager/: agent/, cluster-manager/, file-server/, ...)
-  - a patch (cluster_manager-vN-patch/: a PATCH file, and <folder>/old/ and <folder>/new/ copies)
+  - the initial install (toolkit_cm/: agent/, cluster-manager/, file-server/, ...)
+  - a patch (toolkit_cm-vN-patch/: a PATCH file, and <folder>/old/ and <folder>/new/ copies)
 
 Running it again with the same config.yaml is safe: the renames are already done and the blocks
-are written again. A different `rename:` in a folder already prepared is refused; unzip again.
+are written again. New `rename:` keys are added to a folder already prepared; changing one it
+was prepared with is refused (unzip again).
 config.example.yaml documents every key. Keys this version doesn't know are skipped with a warning,
 so a config.yaml written for a newer release still works here.
 """
@@ -39,7 +42,9 @@ CONFIG_NAME = "config.yaml"
 STAMP = "PREPARED"
 
 # Placeholders this version knows. A rename: key outside this list is skipped with a warning.
-PLACEHOLDERS = ("hypertree", "program_log", "reload_phase", "etc_dir")
+# reload_phase renames both phases; reload_phase1 and reload_phase2 rename one each. Longer
+# placeholders are renamed first, so the two kinds can be given together.
+PLACEHOLDERS = ("hypertree", "program_log", "reload_phase", "reload_phase1", "reload_phase2", "etc_dir")
 SNAKE_CASE = re.compile(r"^[a-z][a-z0-9_]*$")
 CONSTANT_CASE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -253,6 +258,7 @@ def load_config(path: Path) -> tuple[Config, dict[str, str], str]:
         if clash:
             raise SystemExit(f"prepare: rename.{old}: {new!r} contains the placeholder {clash[0]!r}")
         renames[old] = new
+    renames = dict(sorted(renames.items(), key=lambda item: len(item[0]), reverse=True))
     return config, renames, hashlib.sha256(raw_bytes).hexdigest()
 
 
@@ -671,6 +677,21 @@ def stamp_text(sha: str, renames: dict[str, str]) -> str:
     return json.dumps({"config_sha256": sha, "rename": renames}, indent=2) + "\n"
 
 
+def check_added_renames(before: dict[str, str], renames: dict[str, str]) -> None:
+    """A prepared folder may take new renames, but every earlier one must stay as it was, and a
+    new one may not overlap an earlier one (reload_phase1 after reload_phase finds nothing left
+    to rename)."""
+    changed = {k: v for k, v in before.items() if renames.get(k) != v}
+    if changed:
+        raise SystemExit(f"prepare: this folder was prepared with rename {before}; config.yaml now says "
+                         f"{renames}. Renaming twice would mix names: start from a fresh unzip.")
+    for added in renames.keys() - before.keys():
+        overlap = [k for k in before if k in added or added in k]
+        if overlap:
+            raise SystemExit(f"prepare: rename.{added} overlaps rename.{overlap[0]}, which this folder "
+                             f"was already prepared with: start from a fresh unzip.")
+
+
 def previous_renames(root: Path) -> dict[str, str] | None:
     stamp = root / STAMP
     if not stamp.exists():
@@ -697,15 +718,25 @@ def find_config_py(tree: Path) -> Path | None:
 
 
 def main(argv: list[str]) -> int:
-    check_only = "--check" in argv[1:]
+    args = argv[1:]
+    check_only = "--check" in args
     root = HERE
     config, renames, sha = load_config(root / CONFIG_NAME)
+    if "--renames-of" in args:
+        # A patch for a prepared install: use the names the install has, so old/ matches it.
+        # The install takes any new rename: when its own prepare.py runs after the patch.
+        index = args.index("--renames-of") + 1
+        if index >= len(args):
+            raise SystemExit("prepare: --renames-of needs a folder")
+        installed = previous_renames(Path(args[index]))
+        if installed is not None:
+            renames = dict(sorted(((k, v) for k, v in installed.items() if k in PLACEHOLDERS),
+                                  key=lambda item: len(item[0]), reverse=True))
     rename = Renamer(renames)
 
     before = previous_renames(root)
-    if before is not None and before != renames:
-        raise SystemExit(f"prepare: this folder was prepared with rename {before}; config.yaml now says "
-                         f"{renames}. Renaming twice would mix names: start from a fresh unzip.")
+    if before is not None:
+        check_added_renames(before, renames)
 
     config_pys = [p for t in trees(root) if (p := find_config_py(t))]
     config_pys.sort(key=lambda p: "new" not in p.relative_to(root).parts)     # a patch's new/ first

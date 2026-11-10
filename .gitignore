@@ -5,3 +5,8 @@ config.yaml
 PREPARED
 postgres.env
 .patches/
+
+# skills installed for Claude Code (npx skills add); not part of the project
+.agents/
+.claude/
+skills-lock.json

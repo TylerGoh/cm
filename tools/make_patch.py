@@ -2,14 +2,14 @@
 """Builds release zips into dist/. Versions are git tags v0, v1, ...
 
     python3 tools/make_patch.py              the next patch: newest tag vN to HEAD; tags HEAD v(N+1)
-                                             and writes dist/cluster_manager-v(N+1)-patch.zip
+                                             and writes dist/toolkit_cm-v(N+1)-patch.zip
     python3 tools/make_patch.py --rebuild vN the patch v(N-1) -> vN again, without tagging
     python3 tools/make_patch.py --initial    the initial install at the newest tag:
-                                             dist/cluster_manager-initial.zip (VERSION inside)
+                                             dist/toolkit_cm-initial.zip (VERSION inside)
     (push a new tag afterwards: git push origin vN)
 
 The patch zip:
-    cluster_manager-vN-patch/
+    toolkit_cm-vN-patch/
       prepare.py  config.example.yaml  README.txt  PATCH
       agent/  cluster-manager/  file-server/  root/     each: apply.sh  PATCH  old/  new/  [DELETED.txt]
 Each folder holds the files that changed under that service folder (root/ for the top level,
@@ -32,6 +32,7 @@ SERVICES = {                    # folder -> a file that must exist in its instal
     "cluster-manager": "cluster_manager/client/cli.py",
     "file-server": "file_server/file_server.py",
 }
+RELEASE_NAME = "toolkit_cm"     # zip names and their top folder (unlike the code's cluster_manager)
 ROOT_MARKER = "prepare.py"      # root/ applies to a whole install's top folder
 ALWAYS_CARRIED = [              # every config.yaml-generated file
     "agent/agent/worker_client.py", "agent/agent/inventory.py", "agent/config.py", "agent/.env.example",
@@ -73,8 +74,17 @@ def split(path: str) -> tuple[str, str]:
     return "root", path
 
 
+# Dev-only folders: never in a release (the initial zip skips them through .gitattributes).
+DEV_ONLY = ("devenv/",)
+
+
+def is_dev_only(path: str) -> bool:
+    return path.startswith(DEV_ONLY) or path == ".gitattributes"
+
+
 def changed_paths(frm: str, to: str) -> list[str]:
     paths = set(git("diff", "--name-only", "--no-renames", frm, to).decode().split("\n")) - {""}
+    paths = {p for p in paths if not is_dev_only(p)}
     touched = {split(p)[0] for p in paths}
     carried = list(ALWAYS_CARRIED)
     for service in touched & set(SERVICES):
@@ -87,15 +97,16 @@ def changed_paths(frm: str, to: str) -> list[str]:
 
 def readme(frm: str, to: str, folders: list[str], subjects: list[str]) -> str:
     lines = [
-        f"cluster_manager {frm} -> {to}",
+        f"{RELEASE_NAME} {frm} -> {to}",
         "",
         *[f"  {s}" for s in subjects],
         "",
         "All at once, on your prepared install folder (the one holding config.yaml):",
-        "       bash apply.sh /path/to/cluster_manager",
+        f"       bash apply.sh /path/to/{RELEASE_NAME}",
         "   It prepares this patch with that folder's config.yaml, checks every service, and applies",
         "   them all, or changes nothing if any check fails (--force replaces locally changed files).",
-        "   Then commit and push the result.",
+        "   Then it runs that folder's prepare.py, so config.yaml changes (new renames included) reach",
+        "   the install. Run it again after editing config.yaml. Then commit and push the result.",
         "",
         "Or by hand, one box at a time:",
         "1. Copy your config.yaml into this folder (next to prepare.py) and run:",
@@ -105,7 +116,7 @@ def readme(frm: str, to: str, folders: list[str], subjects: list[str]) -> str:
         "2. Copy each folder to the box that runs it and run its apply.sh on the installed folder:",
     ]
     for folder in folders:
-        target = "/path/to/cluster_manager (a whole install's top folder)" if folder == "root" else f"/opt/{folder}"
+        target = f"/path/to/{RELEASE_NAME} (a whole install's top folder)" if folder == "root" else f"/opt/{folder}"
         lines.append(f"       {folder}/:  bash apply.sh {target}")
     lines += [
         "   apply.sh checks every file is still at " + frm + " and changes nothing if one isn't (add",
@@ -205,12 +216,16 @@ echo "$SERVICE $TO applied; old files are in $BACKUP."
 APPLY_ALL_SH = r'''#!/usr/bin/env bash
 # Applies the whole patch to a prepared install folder (the one holding prepare.py, config.yaml,
 # agent/, cluster-manager/, file-server/), in one go:   bash apply.sh [--force] INSTALL_FOLDER
-# 1. Prepares this patch with INSTALL_FOLDER/config.yaml (or a config.yaml already here), unless
-#    it's prepared already. Needs python3 with pyyaml and pydantic ($PYTHON to choose another).
+# 1. Prepares this patch with INSTALL_FOLDER/config.yaml (or a config.yaml already here), on every
+#    run, using the names INSTALL_FOLDER was prepared with, so old/ matches it.
+#    Needs python3 with pyyaml and pydantic ($PYTHON to choose another).
 # 2. Checks every service folder first; if any would be refused, nothing changes (--force
 #    replaces locally changed files, backed up).
 # 3. Applies each one; a service folder missing from INSTALL_FOLDER is skipped.
-# Then commit the result in your git repositories. .env files are never touched.
+# 4. Runs INSTALL_FOLDER's own prepare.py (the new one) with its config.yaml, so every config.yaml
+#    change reaches the install, new renames included, even when the patch was applied before.
+#    It writes each service's .env from config.yaml's env:, as at install.
+# Then commit the result in your git repository.
 set -euo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 PYTHON=${PYTHON:-python3}
@@ -227,13 +242,14 @@ ROOT=$(cd "$TARGET" && pwd)
 [[ -f "$ROOT/prepare.py" ]] || { echo "$ROOT has no prepare.py: it isn't an install folder" >&2; exit 1; }
 TO=$(sed -n 's/^to=//p' "$HERE/PATCH")
 
-if [[ ! -f "$HERE/PREPARED" ]]; then
-  if [[ ! -f "$HERE/config.yaml" ]]; then
-    [[ -f "$ROOT/config.yaml" ]] || { echo "no config.yaml in $ROOT or $HERE" >&2; exit 1; }
-    cp "$ROOT/config.yaml" "$HERE/config.yaml"
-  fi
-  "$PYTHON" "$HERE/prepare.py"
+# Every run prepares again from the install folder's current config.yaml, so an edit to it is
+# always picked up (a config.yaml here is used only when the install folder has none).
+if [[ -f "$ROOT/config.yaml" ]]; then
+  cp "$ROOT/config.yaml" "$HERE/config.yaml"
+elif [[ ! -f "$HERE/config.yaml" ]]; then
+  echo "no config.yaml in $ROOT or $HERE" >&2; exit 1
 fi
+"$PYTHON" "$HERE/prepare.py" --renames-of "$ROOT"
 
 target_of() { if [[ "$1" == root ]]; then echo "$ROOT"; else echo "$ROOT/$1"; fi; }
 FOLDERS=()
@@ -255,6 +271,13 @@ echo "== applying"
 for folder in "${FOLDERS[@]}"; do
   bash "$HERE/$folder/apply.sh" "${FORCE[@]}" "$(target_of "$folder")"
 done
+
+echo "== preparing $ROOT with its config.yaml"
+if [[ -f "$ROOT/config.yaml" ]]; then
+  "$PYTHON" "$ROOT/prepare.py"
+else
+  echo "no $ROOT/config.yaml: the install keeps its current names and generated code"
+fi
 echo "$TO applied to $ROOT. Commit it (git status shows what changed), then deploy and restart."
 '''
 
@@ -265,7 +288,7 @@ def build_patch(frm: str, to: str) -> Path:
     for path in changed_paths(frm, to):
         by_folder.setdefault(split(path)[0], []).append(path)
     folders = sorted(by_folder, key=lambda f: (f == "root", f))
-    top = f"cluster_manager-{to}-patch"
+    top = f"{RELEASE_NAME}-{to}-patch"
     OUT.mkdir(exist_ok=True)
     out = OUT / f"{top}.zip"
     with zipfile.ZipFile(out, "w") as z:
@@ -296,14 +319,14 @@ def build_patch(frm: str, to: str) -> Path:
 
 def build_initial(version: str) -> Path:
     OUT.mkdir(exist_ok=True)
-    out = OUT / "cluster_manager-initial.zip"
-    archive = git("archive", "--format=zip", "--prefix=cluster_manager/", version)
+    out = OUT / f"{RELEASE_NAME}-initial.zip"
+    archive = git("archive", "--format=zip", f"--prefix={RELEASE_NAME}/", version)
     with zipfile.ZipFile(io.BytesIO(archive)) as src, zipfile.ZipFile(out, "w") as z:
         for info in src.infolist():
             if info.is_dir():
                 continue
             add(z, info.filename, src.read(info), (info.external_attr >> 16) & 0o777 or 0o644)
-        add(z, "cluster_manager/VERSION", f"{version}\n".encode())
+        add(z, f"{RELEASE_NAME}/VERSION", f"{version}\n".encode())
     return out
 
 

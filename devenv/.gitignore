@@ -1,0 +1,5 @@
+.venv/
+.run/
+.pytest_cache/
+__pycache__/
+.tui.pid

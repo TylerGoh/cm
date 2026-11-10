@@ -18,18 +18,18 @@ metrics, what the agent sends to Elastic, and your settings) live in one `config
 keep yourself. It is never in this repository; `config.example.yaml` documents every key.
 `prepare.py` applies it.
 
-1. **Get the initial install**, `cluster_manager-initial.zip` (built by `tools/make_patch.py
+1. **Get the initial install**, `toolkit_cm-initial.zip` (built by `tools/make_patch.py
    --initial`; `VERSION` inside says which version it is), and unzip it.
 2. **Prepare it with your config.yaml:**
 
    ```bash
    pip install pyyaml pydantic                # on the machine you prepare on
-   cp ~/config.yaml cluster_manager/
-   python3 cluster_manager/prepare.py --check  # validates, changes nothing
-   python3 cluster_manager/prepare.py
+   cp ~/config.yaml toolkit_cm/
+   python3 toolkit_cm/prepare.py --check       # validates, changes nothing
+   python3 toolkit_cm/prepare.py
    ```
 
-   It renames the placeholders (`hypertree`, `program_log`, `reload_phase`, `etc_dir`) to your
+   It renames the placeholders (`hypertree`, `program_log`, `reload_phase` or `reload_phase1`/`reload_phase2`, `etc_dir`) to your
    names, writes the worker contract and the inventory fields into the agent, and writes each
    service's `.env` (and `cluster-manager/deploy/postgres.env`) from `config.yaml`'s `env:`
    values. A section given must have every key: a missing key, or one with no value, stops it
@@ -53,7 +53,7 @@ Releases are numbered v0, v1, v2, ..., one git tag each. The initial install is 
 a version; every later version is a patch from the one before it:
 
 ```bash
-python3 tools/make_patch.py        # commit first; tags HEAD v<N+1>, writes dist/cluster_manager-v<N+1>-patch.zip
+python3 tools/make_patch.py        # commit first; tags HEAD v<N+1>, writes dist/toolkit_cm-v<N+1>-patch.zip
 git push origin v<N+1>
 ```
 
@@ -64,8 +64,8 @@ own `apply.sh`.
 **All at once, on your prepared install folder** (kept in git, with `config.yaml` in it):
 
 ```bash
-bash cluster_manager-v<N>-patch/apply.sh ~/cluster_manager   # --force replaces locally changed files
-cd ~/cluster_manager && git status && git commit -am v<N>     # then push and deploy each service
+bash toolkit_cm-v<N>-patch/apply.sh ~/toolkit_cm        # --force replaces locally changed files
+cd ~/toolkit_cm && git status && git commit -am v<N>          # then push and deploy each service
 ```
 
 It prepares the patch with that folder's `config.yaml`, checks every service folder against the
@@ -91,6 +91,10 @@ service. The units expect each folder at `/opt/<folder>` and run as root.
 - The daemon's `FILE_SERVER_URL` is `http://<file server host>:<FILE_SERVER_PORT>`.
 - The daemon's `FILE_SERVER_FETCH_TIMEOUT` is longer than the file server's `FILE_SERVER_UPSTREAM_TIMEOUT`.
 - Each agent's `CLUSTER_MANAGER_URL` is `http://<cluster manager host>:<daemon PORT>`.
+- The daemon's `NON_RESPONDING_SECONDS` is several of the agent's `HEARTBEAT_INTERVAL`.
+- `HEARTBEAT_INTERVAL` is a required agent key since the release after v1: add
+  `HEARTBEAT_INTERVAL: 10` under `env: agent:` in your `config.yaml` before applying that patch,
+  or `prepare.py` stops.
 - The daemon's `CANARY_DURATION_SECONDS` comfortably exceeds an update plus the agent's
   `PERFORMANCE_WINDOW_SECONDS`.
 - Agents never need the file server's address: the daemon gives them complete URLs.

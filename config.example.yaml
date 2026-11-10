@@ -1,6 +1,6 @@
 # config.yaml: your names and your worker, for prepare.py. Keep your own copy (it's never in the
 # repo) and copy it next to prepare.py in the initial install and in every patch:
-#   cp ~/config.yaml cluster_manager/ && python3 cluster_manager/prepare.py
+#   cp ~/config.yaml toolkit_cm/ && python3 toolkit_cm/prepare.py
 # One config.yaml serves every install and every patch. Keys a release doesn't know are skipped
 # with a warning, so it can carry keys for newer releases.
 # These example values reproduce the files as they are in the repo.
@@ -14,13 +14,17 @@
 #   Capitalised   Program log       -> App log
 # Matches inside longer names are renamed too (fetch_hypertree, hypertrees, reload_phase1).
 # Placeholders: hypertree, program_log, reload_phase (the code's reload_phase1()/reload_phase2(),
-# RELOAD_PHASE1_COMMAND, ...), etc_dir. Leave one out to keep it.
+# RELOAD_PHASE1_COMMAND, ...), reload_phase1 and reload_phase2 (one phase each, for two unrelated
+# names), etc_dir. Leave one out to keep it.
+# A folder already prepared can take new renames; ones it was prepared with can't change.
 # Renaming hypertree changes the agent <-> daemon wire and the file server's paths: every
 # service must be prepared with the same config.yaml.
 rename: {}
 #   hypertree: route_map
 #   program_log: app_log
 #   reload_phase: reload_bind
+#   reload_phase1: prepare_bind     # or one name per phase instead of reload_phase
+#   reload_phase2: switch_bind
 
 # --- worker: the worker's commands and metrics (the worker contract in agent/agent/worker_client.py) ---
 # Every command is appended as-is to the agent's WORKER_URL, which ends where the command name goes
@@ -98,6 +102,7 @@ env: {}
 #     WORKER_COMMAND: ["/opt/worker/bin/worker", "--flag-a"]
 #     BUNDLE_SYMLINK_MAPPING: {"vision/model.bin": "vision/model.bin"}
 #     RACK: 7
+#     HEARTBEAT_INTERVAL: 10       # new in the release after v1: add it, or prepare.py stops
 #     ... every other key of agent/.env.example
 #   cluster-manager:
 #     PORT: 8000

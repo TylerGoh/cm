@@ -67,8 +67,8 @@ wire → models, pipeline, state_store → worker_client, elastic → process, u
 ## How it works
 
 - The agent runs as a FastAPI app under uvicorn. The lifespan in `app.py` builds everything and starts the loops.
-- `tick_loop` calls `tick()`, then sleeps a fixed `TICK_INTERVAL` (10s). No jitter.
-- Each tick: `_observe()`, then `_sync(observed)` (the heartbeat: send the report, receive the desired state), then `decide()` if idle, then `_start_operation()`, then `_publish(observed)`.
+- `heartbeat_loop` calls `heartbeat_tick()`, then sleeps a fixed `HEARTBEAT_INTERVAL` (a setting; 10s in the examples). No jitter.
+- Each heartbeat tick: `_observe()`, then `_sync(observed)` (the heartbeat: send the report, receive the desired state), then `decide()` if idle, then `_start_operation()`, then `_publish(observed)`.
 - The agent only acts on a snapshot received this tick, and does nothing if the heartbeat fails. The reply always carries the full desired state; nothing is cached.
 - One operation runs at a time, as a background task. `tick` skips `decide` while one is active, and does nothing else about the running operation: it still observes, sends the heartbeat and publishes.
 - Operations restart from scratch: no resuming, every step is idempotent, and an interrupted operation is discarded. The agent's memory is persisted only to survive deliberate restarts.
@@ -79,7 +79,7 @@ wire → models, pipeline, state_store → worker_client, elastic → process, u
 - CRASHED means the worker has failed: either its pid is gone, or it's alive but hung (it failed `max_failures` liveness checks in a row). Both go through the same crash path.
 - The worker outlives an agent restart. The agent's systemd unit has `KillMode=process`, so stopping the agent doesn't kill the worker it spawned. REATTACH relies on this.
 - The agent only reports a crash it was alive to see. A worker whose pid disappeared while the agent was down isn't treated as crashed: `reattach` settles the file to STOPPED, since the agent can't know why the worker went away (it may have been stopped by hand).
-- Deployment settings come from `config` (see config.py). `TICK_INTERVAL` and `SHUTDOWN_GRACE` stay constants.
+- Deployment settings come from `config` (see config.py). `SHUTDOWN_GRACE` stays a constant.
 
 ## config.py
 
@@ -93,7 +93,7 @@ Code: `config.py` (`AgentConfig`, `config`). Imported as `from config import con
 - `bundle_symlink_mapping` is a JSON object: file inside a bundle → file path under `etc_dir` where its symlink goes. Links are per file, never per folder.
 - `bundle_symlink_default_dir` is a folder under `etc_dir`. Every bundle file not in `bundle_symlink_mapping` is linked there by its name alone, flattened. Empty turns it off (`app.py` passes `None`).
 - Settings read by `pydantic-settings` directly are not exported, so the worker never sees them; it inherits the agent's ordinary environment.
-- The values are the owner's; the comments in `config.py` record the constraints the design depends on (`max_failures × health_interval`, `inventory_interval` at least one tick).
+- The values are the owner's; the comments in `config.py` record the constraints the design depends on (`max_failures × health_interval`, `inventory_interval` at least one heartbeat tick).
 
 ## wire.py
 
@@ -328,7 +328,7 @@ Code: `agent/feed.py` (`Conditions`, `ConditionFeed`). `Conditions(process_statu
 - `process_status` is the observed status from `ProcessManager.derive_status`, so CRASHED includes a hung worker.
 - `busy` and `updating` are both derived from `_active` in `_publish`, never stored. `busy` is true while any operation runs. `updating` is true while the operation is in `UPDATING_OPS` (UPDATE, FORCE_UPDATE). The supervisor decides which operations count as updating, so the operation type never reaches the feed. Being derived, neither can be left stuck at `True` by a crash, a cancellation or a missed reset.
 - `running_version` is only fetched while the process is RUNNING, so it's `None` otherwise.
-- `_publish` runs every tick, even when the heartbeat failed, and `_finish` publishes so `busy` and `updating` drop as soon as an operation ends. If the tick loop stalls, readers keep seeing the last conditions.
+- `_publish` runs every tick, even when the heartbeat failed, and `_finish` publishes so `busy` and `updating` drop as soon as an operation ends. If the heartbeat loop stalls, readers keep seeing the last conditions.
 
 ### health.py
 
@@ -423,7 +423,7 @@ Code: `agent/inventory.py` (`FeedField`, `SettingField`, `INVENTORY_FIELDS`, `RE
 - `RECORD_KEYS` (`at`, `hostname`, `ipv4`) are taken; the constructor refuses them, a repeated field, an unknown feed source and a setting the agent doesn't have.
 - `running_version` is `None` unless the process is RUNNING, since that's the only time the supervisor fetches it.
 - With `require_running`, it sends nothing unless the process is RUNNING. The value comes from `config`.
-- The data is at most one tick old. `interval` (from `config`) should be at least one tick; shorter only sends duplicates.
+- The data is at most one heartbeat tick old. `interval` (from `config`) should be at least one heartbeat tick; shorter only sends duplicates.
 
 ## cluster_manager_client.py
 
@@ -451,7 +451,7 @@ The lifespan, startup half (before `yield`):
 1. Build the stores and run `_ensure_first_boot`.
 2. Build `HostInfo` from `config`, then `ConditionFeed`, `WorkerClient`, `ElasticClient`, `ClusterManagerClient`, `ProcessManager`, `UpdateManager`, `HealthMonitor`, `PerformanceMonitor`, `InventoryExporter`, `MetricsExporter` and the `Supervisor`. Each object gets only what it uses.
 3. `_record_start`: one `agent_started` document (`event`, `at`, `agent_version`, plus the host fields) to the host index before any loop starts. `agent_version` is the installed version of the `agent` distribution (`DISTRIBUTION` in `app.py`), or `"unknown"` when running from a source tree that isn't installed. Best effort; a down Elastic doesn't block startup, and the document is then lost.
-4. Start explicit tasks (not a TaskGroup): `tick_loop`, `health.run()`, `performance.run()`, `inventory.run()`, `metrics_exporter.run()`.
+4. Start explicit tasks (not a TaskGroup): `heartbeat_loop`, `health.run()`, `performance.run()`, `inventory.run()`, `metrics_exporter.run()`.
    - The tick task has `_exit_if_failed`: if it ends with an exception, it logs and sends the process SIGTERM, so uvicorn shuts down and systemd restarts the agent.
    - The other tasks have `_log_if_failed`: a crash is logged and the supervisor keeps running.
 
@@ -476,7 +476,7 @@ README.md            the whole flow: release, prepare, settings, copy, install b
 prepare.py           applies config.yaml: renames, generated blocks, .env files (initial zip and patches)
 config.example.yaml  every config.yaml key, documented; config.yaml itself is the owner's and git-ignored
 check_wire.sh        checks the two wire.py copies are identical
-tools/make_patch.py  builds dist/cluster_manager-initial.zip and dist/cluster_manager-vN-patch.zip
+tools/make_patch.py  builds dist/toolkit_cm-initial.zip and dist/toolkit_cm-vN-patch.zip
 docs/                architecture.md, decisions.md, open-items.md, worker-contract.md, metrics-draft.md
 agent/               distribution "agent": the `agent` command
   README.md  .gitignore  .env.example  pyproject.toml  config.py  agent/  tests/  deploy/agent.service
@@ -496,14 +496,14 @@ file-server/         distribution "file-server": the `file-server` command
 - `deploy/agent.service`: `KillMode=process` (the worker outlives the agent), `TimeoutStopSec=40` (open connections 5s, the tick in progress up to the 5s heartbeat, and the ~20s operation grace), `PrivateTmp=no` (console logs are in `/tmp`), `Restart=always`.
 - `deploy/cluster-manager.service` and `deploy/file-server.service`: one process each.
 - First install order: the file server, then the cluster manager (its first boot fetches the bootstrap version through the file server), then the agents.
-- Releases are git tags `v0`, `v1`, ... `tools/make_patch.py --initial` zips the newest tag as `cluster_manager-initial.zip` (with a `VERSION` file); `tools/make_patch.py` tags HEAD as the next version and builds `cluster_manager-vN-patch.zip` from the version before. The owner's proprietary details live in one `config.yaml` that never enters the repository; every zip carries `prepare.py`, which applies it.
+- Releases are git tags `v0`, `v1`, ... `tools/make_patch.py --initial` zips the newest tag as `toolkit_cm-initial.zip` (with a `VERSION` file, everything under `toolkit_cm/`); `tools/make_patch.py` tags HEAD as the next version and builds `toolkit_cm-vN-patch.zip` (top folder `toolkit_cm-vN-patch/`) from the version before. The owner's proprietary details live in one `config.yaml` that never enters the repository; every zip carries `prepare.py`, which applies it.
 - `prepare.py` (needs pyyaml and pydantic; `--check` only validates) reads `config.yaml` next to it and, in order:
   1. validates everything it knows before changing anything (unknown keys are skipped with a warning, so a newer `config.yaml` works with an older release): the worker contract (as the old metrics generator did: unique fields and names, commands without a leading slash), every `{config.x}` in a command against the agent's settings, the inventory fields, and the renames;
-  2. renames each placeholder in `rename:` (`hypertree`, `program_log`, `reload_phase`, `etc_dir`) in every form (`program_log`, `PROGRAM_LOG`, `ProgramLog`, `program log`, `Program log`), inside text files and in file and folder names, skipping itself, the configs, `.git`, virtualenvs, caches and binaries. A new name must be snake_case and can't contain a placeholder, so running it again is a no-op; a folder already prepared with different names is refused (`PREPARED` records them). Renaming `hypertree` changes the wire fields, the file server's routes and its stored file name together, so every service is prepared with the same `config.yaml`;
+  2. renames each placeholder in `rename:` (`hypertree`, `program_log`, `reload_phase`, `reload_phase1`, `reload_phase2`, `etc_dir`; longest first, so one name per phase can be given, with or without `reload_phase`) in every form (`program_log`, `PROGRAM_LOG`, `ProgramLog`, `program log`, `Program log`), inside text files and in file and folder names, skipping itself, the configs, `.git`, virtualenvs, caches and binaries. A new name must be snake_case and can't contain a placeholder, so running it again is a no-op; a folder already prepared can take new renames, but one whose earlier names change, or a new name overlapping an earlier one, is refused (`PREPARED` records them). Renaming `hypertree` changes the wire fields, the file server's routes and its stored file name together, so every service is prepared with the same `config.yaml`;
   3. rewrites every generated block (`# --- BEGIN generated: <name>` to `# --- END generated: <name> ---`): the worker contract, the inventory fields, and the inventory settings in `agent/config.py` and `agent/.env.example`. Names of ours in a block are renamed; values from `config.yaml` (commands, metric names) are written exactly as given;
   4. writes each service's `.env` (and `cluster-manager/deploy/postgres.env`) from its `.env.example` and `config.yaml`'s `env:` values, after the renames and the generated settings, so the template has every key this release needs. A section left out of `env:` writes no `.env`; a section given must have every key, and a missing key or one with no value (`KEY:` or `KEY: null`) stops `prepare.py` in step 1, before anything changes. `""` is a value and writes the key empty. Keys may be written in placeholder or renamed form; the files are chmod 600.
 - A patch zip holds `prepare.py`, `README.txt`, `PATCH` and one folder per changed service (`root/` for the top level), each with `old/` and `new/` copies of its changed files, `DELETED.txt` when files go, `PATCH` and `apply.sh`. The agent's generated files and each included service's `.env.example` are always carried. `prepare.py` treats each `old/` and `new/` as a tree, and writes each service's `.env` at the top of its folder. `bash apply.sh [--force] TARGET` refuses an unprepared folder or a target without the service's marker file, compares every target file with `old/` outside the generated blocks and changes nothing if one differs (unless `--force`), backs up to `TARGET/.patches/vN/`, copies `new/` in, deletes `DELETED.txt`'s files, logs to `TARGET/.patches/applied` (a second run says so and stops), and lists `.env` keys the new `.env.example` adds or drops. It never touches a `.env`.
-- The patch's top-level `apply.sh [--force] INSTALL_FOLDER` does it all on a prepared install folder (the owner keeps it in git): it prepares the patch with that folder's `config.yaml` unless already prepared, runs every service folder's `apply.sh --check` first and changes nothing if any would be refused, then applies each (`root/` to the folder itself, a missing service folder skipped). `.patches/` is git-ignored, so `git status` afterwards shows only the patch.
+- The patch's top-level `apply.sh [--force] INSTALL_FOLDER` does it all on a prepared install folder (the owner keeps it in git): it copies that folder's current `config.yaml` in and prepares the patch on every run, so `config.yaml` edits are picked up, runs every service folder's `apply.sh --check` first and changes nothing if any would be refused, then applies each (`root/` to the folder itself, a missing service folder skipped). `.patches/` is git-ignored, so `git status` afterwards shows only the patch.
 
 ## Cluster manager daemon and client
 

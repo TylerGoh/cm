@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# Opens the dev test environment's TUI: a mock cluster (daemon, file server, two agents with
+# fake workers) that runs scenarios and lets you type read-only cm commands.
+#   ./devenv/dev            open the TUI
+#   ./devenv/dev test       run devenv's own tests (slow: every scenario runs for real)
+# Builds devenv/.venv (Python 3.12, uv) on first use, and again when a pyproject.toml changes.
+set -euo pipefail
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(dirname "$HERE")
+VENV="$HERE/.venv"
+
+command -v uv >/dev/null || { echo "devenv needs uv (https://docs.astral.sh/uv/)" >&2; exit 1; }
+
+STAMP=$(cat "$REPO"/agent/pyproject.toml "$REPO"/cluster-manager/pyproject.toml \
+            "$REPO"/file-server/pyproject.toml "$HERE"/requirements.txt | sha256sum | cut -d' ' -f1)
+if [[ ! -x "$VENV/bin/python" || "$(cat "$VENV/.stamp" 2>/dev/null)" != "$STAMP" ]]; then
+  echo "devenv: building $VENV ..."
+  uv venv -q --allow-existing --python 3.12 "$VENV"
+  # The services' dependencies only: each service runs from a fresh copy of its source.
+  uv pip install -q --python "$VENV/bin/python" \
+    -r <("$VENV/bin/python" "$HERE/harness/deps.py" "$REPO") -r "$HERE/requirements.txt"
+  echo "$STAMP" > "$VENV/.stamp"
+fi
+
+export PYTHONPATH="$HERE"
+if [[ "${1:-}" == test ]]; then
+  shift
+  exec "$VENV/bin/python" -m pytest "$HERE/tests" "$@"
+fi
+exec "$VENV/bin/python" -m harness "$@"
