@@ -28,14 +28,14 @@ from harness.scenarios import SCENARIOS, Run, State, execute
 
 READ_ONLY = {
     "status": "Is the fleet OK?",
-    "agents": "One line per live agent.",
+    "agents": "One line per live agent; --canary for the canary only.",
     "agent": "Everything about one agent (cm agent <ip>).",
     "versions": "Every version and its status.",
     "canary": "The running canary, as of now.",
     "incidents": "Open and recently closed incidents.",
 }
 HELP = """\
-cm status | agents | agent <ip> | versions | canary | incidents   (add --json for raw JSON)
+cm status | agents [--canary] | agent <ip> | versions | canary | incidents   (add --json for raw JSON)
 run <scenario>     reset to the base state and run it (or Enter in the list)
 help               this
 exit               clean everything up and quit (also: quit)
@@ -135,7 +135,7 @@ class DevenvApp(App[None]):
         with Vertical(id="bottom"):
             yield RichLog(id="console", markup=False, wrap=False, auto_scroll=True)
             commands = [f"cm {c}" for c in READ_ONLY if c != "agent"]
-            commands += [f"cm agent {ip}" for ip in AGENT_IPS]
+            commands += ["cm agents --canary"] + [f"cm agent {ip}" for ip in AGENT_IPS]
             commands += [f"run {name}" for name in SCENARIOS] + ["help", "exit"]
             yield Prompt(id="prompt", placeholder="cm agents · run promote · help",
                          suggester=SuggestFromList(commands, case_sensitive=False))

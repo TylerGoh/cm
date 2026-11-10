@@ -24,8 +24,10 @@ async def status(session: Session) -> StatusResponse:
 
 @router.get("/agents", response_model=AgentListResponse)
 async def agents(session: Session, condition: AgentCondition | None = None,
-                 version: str | None = None, problems: bool = False) -> AgentListResponse:
-    return await views.agents(session, condition=condition, version=version, problems=problems)
+                 version: str | None = None, problems: bool = False,
+                 canary: bool = False) -> AgentListResponse:
+    return await views.agents(session, condition=condition, version=version, problems=problems,
+                              canary=canary)
 
 
 @router.get("/agents/{ip}", response_model=AgentDetailResponse)

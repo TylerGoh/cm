@@ -239,11 +239,19 @@ async def promote(run: Run, version: str) -> None:
     run.step(f"dispatch {version}: canary on one agent")
     await run.cm("dispatch", version, f"{UPSTREAM_URL}/jobs/{version}")
     await run.cm("canary")
+    await run.cm("agents", "--canary")
+    canary_ips = [a["ip"] for a in (await run.query("canary"))["canary"]["agents"]]
+    marked = [ip for ip, a in (await run.agents()).items() if a["canary"]]
+    if marked != canary_ips:
+        raise Failed(f"cm agents marks {marked} as canary, but the canary is {canary_ips}")
+    run.ok(f"cm agents marks only the canary agent ({', '.join(marked)})")
     run.step(f"wait for the canary deadline: {version} promoted")
     await run.wait_version(version, "active", timeout=240)
     await run.cm("versions")
     await run.wait_converged(version, timeout=150)
     await run.cm("agents")
+    if any(a["canary"] for a in (await run.agents()).values()):
+        raise Failed("cm agents still marks an agent as canary after the promotion")
 
 
 # --- the scenarios ---

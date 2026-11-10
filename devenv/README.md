@@ -40,7 +40,7 @@ always gives bad numbers.
 - Top left: the scenarios, their state, step and what they're waiting for.
 - Top right: the selected scenario's transcript: each changing command as `cm ...` with cm's
   full answer, and each check.
-- Bottom: read-only `cm` (`status`, `agents`, `agent <ip>`, `versions`, `canary`, `incidents`,
+- Bottom: read-only `cm` (`status`, `agents [--canary]`, `agent <ip>`, `versions`, `canary`, `incidents`,
   with `--json` if you like), `run <scenario>`, `help` and `exit`.
 
 Enter runs the highlighted scenario, Esc stops it, Tab completes. After a scenario ends the

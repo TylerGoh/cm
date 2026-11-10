@@ -62,6 +62,7 @@ class AgentRow(_View):
     desired_version: str
     running_version: str | None
     desired_running: bool
+    canary: bool                                 # its desired version is the one being verified
     process_status: ProcessStatus | None
     agent_status: AgentStatus
     healthy: bool | None

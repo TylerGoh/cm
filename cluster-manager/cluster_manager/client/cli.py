@@ -187,8 +187,10 @@ def render_agents(r: AgentListResponse) -> RenderableType:
         return "no agents match"
     table = new_table("ip", "condition", "desired", "running", "process", "healthy", "perf", "seen", "op")
     for a in r.agents:
-        table.add_row(a.ip, condition_text(a.condition),
-                      a.desired_version + ("" if a.desired_running else " (stopped)"),
+        desired = Text(a.desired_version + ("" if a.desired_running else " (stopped)"))
+        if a.canary:
+            desired.append(" (canary)", style="bold magenta")
+        table.add_row(a.ip, condition_text(a.condition), desired,
                       show(a.running_version), show(a.process_status), show(a.healthy), performance(a),
                       ago(a.last_heartbeat_at), show(a.current_operation))
     return table
@@ -282,7 +284,8 @@ def render_agent(r: AgentDetailResponse) -> RenderableType:
                     f"{r.handled_force_update_generation} (handled)")
     parts.append(compare)
 
-    parts.append(Text.assemble((a.ip, "bold"), "  ", condition_text(a.condition)))
+    parts.append(Text.assemble((a.ip, "bold"), "  ", condition_text(a.condition),
+                               ("  canary", "bold magenta") if a.canary else ""))
     return Group(*parts)
 
 
@@ -307,10 +310,11 @@ def render_canary(r: CanaryResponse) -> RenderableType:
     converged = sum(c.counts[o] for o in (CanaryOutcome.NO_VERDICT, CanaryOutcome.PERFORMANCE,
                                           CanaryOutcome.PASSED))
 
-    def limited(count: int, limit: int, failed: str, over: bool = False) -> Text:
-        """The count, and in red what failed when it is over its limit (a reason to reject)."""
+    def limited(count: int, limit: int, failed: str = "", over: bool = False) -> Text:
+        """The count, red when it is over its limit (a reason to reject), then what failed."""
         if over or count > limit:
-            return Text.assemble((f"{count} (max {limit})", "bold red"), "  ", (failed, "red"))
+            return Text.assemble((f"{count} (max {limit})", "bold red"),
+                                 ("  " + failed if failed else "", "red"))
         return Text(f"{count} (max {limit})")
 
     counts = Table.grid(padding=(0, 2))
@@ -319,10 +323,8 @@ def render_canary(r: CanaryResponse) -> RenderableType:
                                           "failed performance check"))
     # No agent converged rejects the canary whatever the limits, so that shows red too.
     none_converged = converged == 0 and not_converged > 0
-    counts.add_row("not converged", limited(
-        not_converged, c.limits.max_not_converged,
-        "failed convergence check" + (": no agent runs the new version" if none_converged else ""),
-        over=none_converged))
+    counts.add_row("not converged", limited(not_converged, c.limits.max_not_converged,
+                                            over=none_converged))
     counts.add_row("no verdict", str(c.counts[CanaryOutcome.NO_VERDICT]))
     counts.add_row("passed", str(c.counts[CanaryOutcome.PASSED]))
 
@@ -440,9 +442,12 @@ def agents(
                                            help="Only agents that aren't converged or stopped.")] = False,
     condition: Annotated[AgentCondition | None, typer.Option(help="Only agents in this condition.")] = None,
     version: Annotated[str | None, typer.Option(help="Only agents whose desired version is this.")] = None,
+    canary: Annotated[bool, typer.Option("--canary",
+                                         help="Only agents in the running canary.")] = False,
 ) -> None:
-    """One line per live agent."""
-    send(ctx, lambda c: c.agents(condition=condition, version=version, problems=problems), render_agents)
+    """One line per live agent; (canary) marks the agents verifying a new version."""
+    send(ctx, lambda c: c.agents(condition=condition, version=version, problems=problems,
+                                 canary=canary), render_agents)
 
 
 @app.command()

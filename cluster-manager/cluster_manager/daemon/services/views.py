@@ -37,7 +37,8 @@ SETTLED = (AgentCondition.CONVERGED, AgentCondition.STOPPED)
 
 # --- row builders ---
 
-def agent_row(desired: DesiredStateRow, observed: ObservedState, now: datetime) -> AgentRow:
+def agent_row(desired: DesiredStateRow, observed: ObservedState, now: datetime,
+              verifying: str | None) -> AgentRow:
     current = observed.current_operation
     return AgentRow(
         ip=desired.ip,
@@ -46,6 +47,7 @@ def agent_row(desired: DesiredStateRow, observed: ObservedState, now: datetime) 
         desired_version=desired.version,
         running_version=observed.running_version,
         desired_running=desired.desired_running,
+        canary=desired.version == verifying,
         process_status=observed.process_status,
         agent_status=observed.agent_status,
         healthy=observed.healthy,
@@ -110,7 +112,7 @@ async def status(session: AsyncSession) -> StatusResponse:
 
     conditions: dict[AgentCondition, int] = {}
     for _, desired, observed in rows:
-        condition = agent_row(desired, observed, now).condition
+        condition = agent_row(desired, observed, now, None).condition
         conditions[condition] = conditions.get(condition, 0) + 1
 
     canary: CanarySummary | None = None
@@ -135,11 +137,14 @@ async def status(session: AsyncSession) -> StatusResponse:
 
 
 async def agents(session: AsyncSession, *, condition: AgentCondition | None,
-                 version: str | None, problems: bool) -> AgentListResponse:
+                 version: str | None, problems: bool, canary: bool = False) -> AgentListResponse:
     now = datetime.now(UTC)
+    verifying = await _verifying_version(session)
     result: list[AgentRow] = []
     for _, desired, observed in await AgentRepo(session).list_live(version):
-        row = agent_row(desired, observed, now)
+        row = agent_row(desired, observed, now, verifying)
+        if canary and not row.canary:
+            continue
         if condition is not None and row.condition is not condition:
             continue
         if problems and row.condition in SETTLED:
@@ -148,24 +153,29 @@ async def agents(session: AsyncSession, *, condition: AgentCondition | None,
     return AgentListResponse(agents=result)
 
 
+async def _verifying_version(session: AsyncSession) -> str | None:
+    verifying = await VersionDeploymentRepo(session).verifying()
+    return verifying.version if verifying is not None else None
+
+
 async def agent_detail(session: AsyncSession, ip: str) -> AgentDetailResponse:
     found = await AgentRepo(session).get_with_state(ip)
     if found is None:
         raise AgentNotFound(ip)
     agent, desired, observed = found
-    return _detail(agent, desired, observed,
+    return _detail(agent, desired, observed, verifying=await _verifying_version(session),
                    operations=await OperationRepo(session).recent(ip, OPERATIONS_SHOWN),
                    history=await DesiredStateRepo(session).history(ip, HISTORY_SHOWN),
                    incidents=await IncidentRepo(session).open_for_agent(ip))
 
 
 def _detail(agent: Agent, desired: DesiredStateRow, observed: ObservedState, *,
-            operations: list[Operation], history: list[DesiredStateHistoryRow],
+            verifying: str | None, operations: list[Operation], history: list[DesiredStateHistoryRow],
             incidents: list[Incident]) -> AgentDetailResponse:
     current = observed.current_operation
     last = observed.last_operation
     return AgentDetailResponse(
-        agent=agent_row(desired, observed, datetime.now(UTC)),
+        agent=agent_row(desired, observed, datetime.now(UTC), verifying),
         registered_at=agent.registered_at,
         generation=desired.generation,
         acknowledged_generation=observed.acknowledged_generation,

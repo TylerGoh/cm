@@ -55,7 +55,7 @@ class DaemonClient:
         return self._get("/status", StatusResponse)
 
     def agents(self, *, condition: AgentCondition | None = None, version: str | None = None,
-               problems: bool = False) -> AgentListResponse:
+               problems: bool = False, canary: bool = False) -> AgentListResponse:
         params: dict[str, str] = {}
         if condition is not None:
             params["condition"] = condition
@@ -63,6 +63,8 @@ class DaemonClient:
             params["version"] = version
         if problems:
             params["problems"] = "true"
+        if canary:
+            params["canary"] = "true"
         return self._get("/agents", AgentListResponse, params)
 
     def agent(self, ip: str) -> AgentDetailResponse:
