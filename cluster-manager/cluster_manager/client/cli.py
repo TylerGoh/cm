@@ -307,16 +307,22 @@ def render_canary(r: CanaryResponse) -> RenderableType:
     converged = sum(c.counts[o] for o in (CanaryOutcome.NO_VERDICT, CanaryOutcome.PERFORMANCE,
                                           CanaryOutcome.PASSED))
 
-    def limited(count: int, limit: int, over: bool = False) -> Text:
-        """The count in red when it is over its limit (the canary would be rejected for it)."""
-        return Text(f"{count} (max {limit})", style="bold red" if over or count > limit else "")
+    def limited(count: int, limit: int, failed: str, over: bool = False) -> Text:
+        """The count, and in red what failed when it is over its limit (a reason to reject)."""
+        if over or count > limit:
+            return Text.assemble((f"{count} (max {limit})", "bold red"), "  ", (failed, "red"))
+        return Text(f"{count} (max {limit})")
 
     counts = Table.grid(padding=(0, 2))
-    counts.add_row("crashes", limited(crashes, c.limits.max_crashes))
-    counts.add_row("performance", limited(c.counts[CanaryOutcome.PERFORMANCE], c.limits.max_violations))
+    counts.add_row("crashes", limited(crashes, c.limits.max_crashes, "failed crash check"))
+    counts.add_row("performance", limited(c.counts[CanaryOutcome.PERFORMANCE], c.limits.max_violations,
+                                          "failed performance check"))
     # No agent converged rejects the canary whatever the limits, so that shows red too.
-    counts.add_row("not converged", limited(not_converged, c.limits.max_not_converged,
-                                            over=converged == 0 and not_converged > 0))
+    none_converged = converged == 0 and not_converged > 0
+    counts.add_row("not converged", limited(
+        not_converged, c.limits.max_not_converged,
+        "failed convergence check" + (": no agent runs the new version" if none_converged else ""),
+        over=none_converged))
     counts.add_row("no verdict", str(c.counts[CanaryOutcome.NO_VERDICT]))
     counts.add_row("passed", str(c.counts[CanaryOutcome.PASSED]))
 
