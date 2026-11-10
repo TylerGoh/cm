@@ -21,7 +21,7 @@ from rich.table import Table
 from rich.text import Text
 
 from cluster_manager.client.daemon_client import DaemonClient, DaemonError
-from cluster_manager.daemon.wire import OperationView, StepView
+from cluster_manager.daemon.wire import OperationView, ProcessStatus, StepView
 from cluster_manager.schemas import (
     AgentCondition, AgentDetailResponse, AgentListResponse, AgentRow, CanaryOutcome, CanaryResponse,
     DecommissionResponse, DesiredStateChangeResponse, DispatchResponse, IncidentListResponse,
@@ -269,14 +269,17 @@ def render_agent(r: AgentDetailResponse) -> RenderableType:
 
     compare = new_table("", "desired", "observed")
     compare.add_row("version", a.desired_version, show(a.running_version))
-    compare.add_row("running", str(a.desired_running), show(a.process_status))
-    acknowledged = f"acknowledged {r.acknowledged_generation}"
+    # Observed values first, so each reads straight across from the desired one; the kind in brackets.
+    running = "-" if a.process_status is None else \
+        f"{a.process_status == ProcessStatus.RUNNING} ({a.process_status})"
+    compare.add_row("running", str(a.desired_running), running)
+    acknowledged = f"{r.acknowledged_generation} (acknowledged)"
     if r.failed_generation is not None:
-        acknowledged += f", failed {r.failed_generation}"
+        acknowledged += f", {r.failed_generation} (failed)"
     compare.add_row("generation", str(r.generation), acknowledged)
-    compare.add_row("restarts", str(r.restart_generation), f"handled {r.handled_restart_generation}")
+    compare.add_row("restarts", str(r.restart_generation), f"{r.handled_restart_generation} (handled)")
     compare.add_row("force updates", str(r.force_update_generation),
-                    f"handled {r.handled_force_update_generation}")
+                    f"{r.handled_force_update_generation} (handled)")
     parts.append(compare)
 
     parts.append(Text.assemble((a.ip, "bold"), "  ", condition_text(a.condition)))

@@ -67,9 +67,10 @@ async def test_base_console_and_cleanup(app: DevenvApp) -> None:
         await typed(pilot, "cm dispatch job_9 http://x")
         assert "read-only here" in text_of(app.query_one("#console"))
         await typed(pilot, "ls -la")
-        assert "only cm, run and help" in text_of(app.query_one("#console"))
+        assert "only cm, run, help and exit" in text_of(app.query_one("#console"))
         assert ours(), "the base environment should be running"
-        await quit_and_wait(pilot, app)
+        await typed(pilot, "exit")
+        await wait(pilot, lambda: not app.is_running or not envmod.RUN.exists(), 90, "cleanup after exit")
     assert not ours()
     assert not envmod.RUN.exists()
 

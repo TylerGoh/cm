@@ -2,7 +2,7 @@
 
 Top left: the scenarios, each with its state, step and what it's waiting for.
 Top right: the selected scenario's transcript.
-Bottom: a console that takes read-only cm commands, `run <scenario>` and `help`.
+Bottom: a console that takes read-only cm commands, `run <scenario>`, `help` and `exit`.
 Enter runs the highlighted scenario, Esc stops the running one, q (in the list) or Ctrl-C quits.
 Quitting tears everything down first; a second Ctrl-C during that kills whatever is left at once.
 """
@@ -38,6 +38,7 @@ HELP = """\
 cm status | agents | agent <ip> | versions | canary | incidents   (add --json for raw JSON)
 run <scenario>     reset to the base state and run it (or Enter in the list)
 help               this
+exit               clean everything up and quit (also: quit)
 Keys: Enter runs the highlighted scenario · Esc stops it · Tab completes · ↑/↓ history
       q (in the list) or Ctrl-C quits, after cleaning everything up
 Changing commands (dispatch, rollback, restart, ...) are for scenarios only; see their transcripts."""
@@ -135,13 +136,13 @@ class DevenvApp(App[None]):
             yield RichLog(id="console", markup=False, wrap=False, auto_scroll=True)
             commands = [f"cm {c}" for c in READ_ONLY if c != "agent"]
             commands += [f"cm agent {ip}" for ip in AGENT_IPS]
-            commands += [f"run {name}" for name in SCENARIOS] + ["help"]
+            commands += [f"run {name}" for name in SCENARIOS] + ["help", "exit"]
             yield Prompt(id="prompt", placeholder="cm agents · run promote · help",
                          suggester=SuggestFromList(commands, case_sensitive=False))
 
     def on_mount(self) -> None:
         self.query_one("#bottom").border_title = "Console"
-        self.console_log(Text("devenv: read-only cm, `run <scenario>` and `help`. "
+        self.console_log(Text("devenv: read-only cm, `run <scenario>`, `help`, `exit`. "
                               "The base environment is starting…", style="dim"))
         self.set_interval(0.25, self.refresh_view)
         self.query_one("#prompt", Prompt).focus()
@@ -283,6 +284,8 @@ class DevenvApp(App[None]):
         match words:
             case ["help"]:
                 self.console_log(HELP)
+            case ["exit"] | ["quit"]:
+                self.action_quit_clean()
             case ["run", name]:
                 self.run_scenario(name)
             case ["run", *_]:
@@ -290,7 +293,7 @@ class DevenvApp(App[None]):
             case ["cm", *args]:
                 await self.cm(args)
             case _:
-                self.console_log(Text("only cm, run and help here; try help", style="red"))
+                self.console_log(Text("only cm, run, help and exit here; try help", style="red"))
 
     async def cm(self, args: list[str]) -> None:
         command = [a for a in args if a not in ("--json", "--help", "-h")]

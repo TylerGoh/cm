@@ -41,12 +41,12 @@ always gives bad numbers.
 - Top right: the selected scenario's transcript: each changing command as `cm ...` with cm's
   full answer, and each check.
 - Bottom: read-only `cm` (`status`, `agents`, `agent <ip>`, `versions`, `canary`, `incidents`,
-  with `--json` if you like), `run <scenario>` and `help`.
+  with `--json` if you like), `run <scenario>`, `help` and `exit`.
 
 Enter runs the highlighted scenario, Esc stops it, Tab completes. After a scenario ends the
 environment stays up for `cm` until the next run. Logs are in `devenv/.run/logs/`.
 
-Quitting (Ctrl-C, or q in the list) stops everything first and shows each step: agents, workers,
+Quitting (`exit`, Ctrl-C, or q in the list) stops everything first and shows each step: agents, workers,
 daemon, file server, upstream, PostgreSQL, any stray process carrying `DEVENV_RUN`, then
 `devenv/.run/`. A second Ctrl-C kills what's left at once. The next launch clears anything a
 `kill -9` stranded.
