@@ -303,19 +303,32 @@ def render_canary(r: CanaryResponse) -> RenderableType:
         outcomes.add_row(a.ip, outcome_text(a.outcome))
 
     crashes = c.counts[CanaryOutcome.FAULTY_UPDATE] + c.counts[CanaryOutcome.CRASHED]
+    not_converged = c.counts[CanaryOutcome.NOT_CONVERGED]
+    converged = sum(c.counts[o] for o in (CanaryOutcome.NO_VERDICT, CanaryOutcome.PERFORMANCE,
+                                          CanaryOutcome.PASSED))
+
+    def limited(count: int, limit: int, over: bool = False) -> Text:
+        """The count in red when it is over its limit (the canary would be rejected for it)."""
+        return Text(f"{count} (max {limit})", style="bold red" if over or count > limit else "")
+
     counts = Table.grid(padding=(0, 2))
-    counts.add_row("crashes", f"{crashes} (max {c.limits.max_crashes})")
-    counts.add_row("performance", f"{c.counts[CanaryOutcome.PERFORMANCE]} (max {c.limits.max_violations})")
-    counts.add_row("not converged", f"{c.counts[CanaryOutcome.NOT_CONVERGED]} (max {c.limits.max_not_converged})")
+    counts.add_row("crashes", limited(crashes, c.limits.max_crashes))
+    counts.add_row("performance", limited(c.counts[CanaryOutcome.PERFORMANCE], c.limits.max_violations))
+    # No agent converged rejects the canary whatever the limits, so that shows red too.
+    counts.add_row("not converged", limited(not_converged, c.limits.max_not_converged,
+                                            over=converged == 0 and not_converged > 0))
     counts.add_row("no verdict", str(c.counts[CanaryOutcome.NO_VERDICT]))
     counts.add_row("passed", str(c.counts[CanaryOutcome.PASSED]))
 
-    if c.would_reject:
-        verdict = Text.assemble("if judged now: ", ("REJECT", "bold red"))
-    else:
-        verdict = Text.assemble("if judged now: ", ("promote", "green"))
-    title = Text(f"{c.version}  started {ago(c.created_at)}, judged {until(c.deadline)}", style="bold")
-    return Group(outcomes, counts, Text(""), title, verdict)      # the verdict last, next to the prompt
+    title = Text(f"Canary for {c.version} started {elapsed(c.created_at)} ago", style="bold")
+    return Group(outcomes, counts, Text(""), title)      # the title last, next to the prompt
+
+
+def elapsed(moment: datetime) -> str:
+    """"1 min 20 seconds", or "20 seconds" under a minute."""
+    seconds = max(0, int((datetime.now(UTC) - moment).total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    return f"{minutes} min {seconds} seconds" if minutes else f"{seconds} seconds"
 
 
 def render_incidents(r: IncidentListResponse) -> RenderableType:
