@@ -11,16 +11,19 @@ from agent.wire import DesiredState, HeartbeatReport, ProcessStatus
 
 log = logging.getLogger("agent.inventory")
 
-# Keys every host index record carries besides INVENTORY_FIELDS: `at` from here, hostname and
-# ipv4 from ElasticClient. prepare.py refuses them as fields, and so does the constructor.
-RECORD_KEYS = frozenset({"at", "hostname", "ipv4"})
+# Keys every host index document carries besides INVENTORY_FIELDS: `at`, `kind` (inventory or
+# state) and, on an inventory record, `intf` from here; hostname, ip and cluster_name from
+# ElasticClient. prepare.py refuses them as fields, and so does the constructor.
+RECORD_KEYS = frozenset({"at", "kind", "intf", "hostname", "ip", "cluster_name"})
+STATE_KEY = "state"                                 # the state document's id is <ip>_state
 FEED_SOURCES = frozenset({"process_status", "updating", "running_version", "busy", "desired", "observed"})
 
 # Feed sources that are whole states. Each is sent flat: one top-level field per value, named
 # <field>_<value name> (desired_version, observed_healthy), or the value's own name when it already
 # starts with <field>_ (desired_running). Only plain values and lists: the operations are left
-# out, and so is the report's ipv4, which every record already has. observed also carries the
-# feed's updating and busy, so it is the agent's whole observed state in one group.
+# out, and so is the report's ipv4, which every document has as ip. observed also carries the
+# feed's updating and busy, so it is the agent's whole observed state in one group. These go in
+# the host's one state document; every other field goes in each inventory record.
 OBJECT_SOURCES: dict[str, type] = {"desired": DesiredState, "observed": HeartbeatReport}
 LEFT_OUT = frozenset({"current_operation", "last_operation", "ipv4"})
 OBSERVED_FROM_FEED = ("updating", "busy")
@@ -92,17 +95,26 @@ def _plain(value: object) -> object:
 
 
 class InventoryExporter:
-    """Every interval, sends Elastic's host index one record of this host: `at`, then each of
-    INVENTORY_FIELDS, read from the feed or the agent's settings. The host's identity is added
-    by ElasticClient. With require_running, it sends nothing unless the process is RUNNING."""
+    """Every interval, keeps this host's documents in Elastic's host index current:
+    - one inventory record per interface in intfs, id <ip>_intf_<intf>: `at`, `kind: inventory`,
+      `intf`, then each INVENTORY_FIELDS field that isn't a whole state;
+    - one state document, id <ip>_state: `at`, `kind: state`, then the desired_* and observed_*
+      fields (only when INVENTORY_FIELDS has desired or observed).
+    A write under a fixed id replaces the last one; then every other document of this host is
+    deleted (an interface no longer in intfs, records from before the fixed ids), except events.
+    The host's identity is added by ElasticClient. With require_running, it does nothing unless
+    the process is RUNNING."""
 
     def __init__(self, elastic: ElasticClient, feed: ConditionFeed, *, settings: object,
-                 interval: float, require_running: bool,
+                 intfs: list[str], interval: float, require_running: bool,
                  fields: tuple[FeedField | SettingField, ...] = INVENTORY_FIELDS) -> None:
         _check(fields, settings)                    # a bad field fails startup
+        if not intfs or len(set(intfs)) != len(intfs):
+            raise ValueError(f"inventory: intf must name at least one interface, each once: {intfs}")
         self._elastic = elastic
         self._feed = feed
         self._settings = settings
+        self._intfs = list(intfs)
         self._fields = fields
         self._interval = interval                   # at least one heartbeat tick; shorter only sends duplicates
         self._require_running = require_running
@@ -117,24 +129,34 @@ class InventoryExporter:
             next_at = max(next_at + self._interval, time.monotonic())     # steady cadence
             await asyncio.sleep(next_at - time.monotonic())
 
-    def record(self, cond: Conditions) -> dict[str, object]:
-        doc: dict[str, object] = {"at": datetime.now(UTC).isoformat()}
+    def documents(self, cond: Conditions) -> dict[str, dict[str, object]]:
+        """Every document this host keeps in the host index, by key (the id after <ip>_)."""
+        at = datetime.now(UTC).isoformat()
+        record: dict[str, object] = {}
+        state: dict[str, object] = {}
         for f in self._fields:
             if isinstance(f, FeedField) and f.source in OBJECT_SOURCES:
-                state = getattr(cond, f.source)              # None before the first heartbeat
+                value = getattr(cond, f.source)              # None before the first heartbeat
                 for key, name in _flat_names(f.field, f.source).items():
                     if f.source == "observed" and name in OBSERVED_FROM_FEED:
-                        doc[key] = _plain(getattr(cond, name))   # always known
+                        state[key] = _plain(getattr(cond, name))   # always known
                     else:
-                        doc[key] = _plain(getattr(state, name)) if state is not None else None
+                        state[key] = _plain(getattr(value, name)) if value is not None else None
             elif isinstance(f, FeedField):
-                doc[f.field] = _plain(getattr(cond, f.source))
+                record[f.field] = _plain(getattr(cond, f.source))
             else:
-                doc[f.field] = _plain(getattr(self._settings, f.setting))
-        return doc
+                record[f.field] = _plain(getattr(self._settings, f.setting))
+        docs = {f"intf_{intf}": {"at": at, "kind": "inventory", "intf": intf, **record}
+                for intf in self._intfs}
+        if state:
+            docs[STATE_KEY] = {"at": at, "kind": "state", **state}
+        return docs
 
     async def _step(self) -> None:
         cond = self._feed.current()
         if self._require_running and cond.process_status is not ProcessStatus.RUNNING:
             return
-        await self._elastic.index_host(self.record(cond))
+        docs = self.documents(cond)
+        for key, doc in docs.items():
+            await self._elastic.put_host(key, doc)
+        await self._elastic.delete_other_host_docs(keep=list(docs))

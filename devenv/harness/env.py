@@ -85,6 +85,7 @@ def agent_env(n: int) -> dict[str, object]:
     worker_port = WORKER_PORTS[n - 1]
     return {
         "IPV4": AGENT_IPS[n - 1], "HOSTNAME": f"dev-agent-{n}",
+        "CLUSTER_NAME": "dev", "INTF": ["eth0", "eth1"],
         "PORT": AGENT_PORTS[n - 1], "LOG_LEVEL": "INFO", "LOG_FORMAT": LOG_FORMAT,
         "MEMORY_STORE_PATH": str(home / "state" / "memory.json"),
         "PROCESS_STORE_PATH": str(home / "state" / "process.json"),

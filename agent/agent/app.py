@@ -96,7 +96,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     process_store = JsonStore(ProcessMemory, config.process_store_path)
     _ensure_first_boot(memory_store, process_store)
 
-    host = HostInfo(ipv4=config.ipv4, hostname=config.hostname)
+    host = HostInfo(ipv4=config.ipv4, hostname=config.hostname, cluster_name=config.cluster_name)
     feed = ConditionFeed()
     worker = WorkerClient(config.worker_url, timeout=config.worker_timeout,
                           reload_timeout=config.reload_timeout, settings=config)
@@ -126,7 +126,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                                      window_seconds=config.performance_window_seconds,
                                      max_failed_ratio=config.max_failed_ratio,
                                      max_failures=config.max_metrics_failures)
-    inventory = InventoryExporter(elastic, feed, settings=config, interval=config.inventory_interval,
+    inventory = InventoryExporter(elastic, feed, settings=config, intfs=config.intf,
+                                  interval=config.inventory_interval,
                                   require_running=config.require_running)
     metrics_exporter = MetricsExporter(worker, elastic, feed, interval=config.metrics_export_interval)
     supervisor = Supervisor(host.ipv4, process, updates, worker, health, performance, feed,

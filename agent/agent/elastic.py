@@ -25,8 +25,10 @@ HINTS = {
 
 class ElasticClient:
     """Best effort: never raises (cancellation still propagates). Two indexes; callers pick one
-    by method and never see index names. Every document gets the host's identity added here, so
-    callers never handle it. Uses the official async client on httpx, with an API key and the CA
+    by method and never see index names. Every document gets the host's identity (hostname, ip,
+    cluster_name) added here, so callers never handle it. Host-index documents that must stay
+    current are written under a fixed id, <ip>_<key>, so a write replaces the last one, and
+    delete_other_host_docs removes this host's documents that aren't current any more. Uses the official async client on httpx, with an API key and the CA
     in elastic.cert. One attempt per document, no retries: a failed document is dropped.
 
     Each index logs its failure when it starts and again whenever the failure changes, saying
@@ -47,10 +49,37 @@ class ElasticClient:
         self._host = host
         self._metrics_index = metrics_index
         self._host_index = host_index
-        self._failure: dict[str, str] = {}           # index -> the failure last logged for it
+        self._failure: dict[str, str] = {}           # what failed -> the failure last logged for it
 
     async def index_host(self, doc: dict[str, object]) -> None:
+        """An event (agent_started): a new document every time, never deleted by the agent."""
         await self._index(self._host_index, doc)
+
+    def host_doc_id(self, key: str) -> str:
+        return f"{self._host.ipv4}_{key}"
+
+    async def put_host(self, key: str, doc: dict[str, object]) -> None:
+        """Writes the host document <ip>_<key>, replacing the one there."""
+        await self._index(self._host_index, doc, doc_id=self.host_doc_id(key))
+
+    async def delete_other_host_docs(self, keep: list[str]) -> None:
+        """Deletes this host's host-index documents except the keys in keep and events. Matches
+        the host on ip, and on ipv4 for documents written before the field was renamed."""
+        ip = str(self._host.ipv4)
+        query = {"bool": {
+            "should": [{"term": {field: ip}} for field in ("ip", "ip.keyword", "ipv4", "ipv4.keyword")],
+            "minimum_should_match": 1,
+            "must_not": [{"ids": {"values": [self.host_doc_id(k) for k in keep]}},
+                         {"exists": {"field": "event"}}],
+        }}
+        what = f"{self._host_index} (deleting old documents)"
+        try:
+            await self._es.delete_by_query(index=self._host_index, query=query, conflicts="proceed",
+                                           ignore_unavailable=True, allow_no_indices=True)
+        except Exception as exc:
+            self._failed(what, exc)
+            return
+        self._worked(what)
 
     async def index_metrics(self, doc: dict[str, object]) -> None:
         await self._index(self._metrics_index, doc)          # the metrics exporter's documents
@@ -58,20 +87,27 @@ class ElasticClient:
     async def aclose(self) -> None:
         await self._es.close()
 
-    async def _index(self, index: str, doc: dict[str, object]) -> None:
+    async def _index(self, index: str, doc: dict[str, object], doc_id: str | None = None) -> None:
         body = dict(doc)
         body["hostname"] = self._host.hostname
-        body["ipv4"] = str(self._host.ipv4)
+        body["ip"] = str(self._host.ipv4)
+        body["cluster_name"] = self._host.cluster_name
         try:
-            await self._es.index(index=index, document=body)
+            await self._es.index(index=index, document=body, id=doc_id)
         except Exception as exc:
-            failure = self.describe(exc)
-            if self._failure.get(index) != failure:
-                log.warning("elastic write to %s failed: %s", index, failure)
-                self._failure[index] = failure
+            self._failed(index, exc)
             return
-        if self._failure.pop(index, None) is not None:
-            log.info("elastic writes to %s recovered", index)
+        self._worked(index)
+
+    def _failed(self, what: str, exc: Exception) -> None:
+        failure = self.describe(exc)
+        if self._failure.get(what) != failure:
+            log.warning("elastic write to %s failed: %s", what, failure)
+            self._failure[what] = failure
+
+    def _worked(self, what: str) -> None:
+        if self._failure.pop(what, None) is not None:
+            log.info("elastic writes to %s recovered", what)
 
     def describe(self, exc: Exception) -> str:
         """One line saying what went wrong, without the document or the key."""

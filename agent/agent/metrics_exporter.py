@@ -11,9 +11,9 @@ from agent.worker_client import WorkerClient, WorkerMetrics
 log = logging.getLogger("agent.metrics_exporter")
 
 # Keys every metrics document carries besides the metric fields: these four from here, and
-# hostname and ipv4 from ElasticClient. No WorkerMetrics field may use one of them; prepare.py
-# refuses them, and so does the constructor.
-DOCUMENT_KEYS = frozenset({"@timestamp", "at", "running_version", "updating", "hostname", "ipv4"})
+# hostname, ip and cluster_name from ElasticClient. No WorkerMetrics field may use one of them;
+# prepare.py refuses them, and so does the constructor.
+DOCUMENT_KEYS = frozenset({"@timestamp", "at", "running_version", "updating", "hostname", "ip", "cluster_name"})
 
 
 class MetricsExporter:
@@ -21,8 +21,8 @@ class MetricsExporter:
     document to Elastic's metrics index: each WorkerMetrics field under its field name, plus
     `@timestamp` and `at` (the same UTC time), `running_version` and `updating`. A metric has
     two names: the worker's (its validation_alias, used only to read the worker's JSON) and the
-    field name, which is its name in Elastic. Counters are sent as the worker reports them, cumulative; a dashboard derives
-    rates. It judges nothing: the performance monitor takes its own readings."""
+    field name, which is its name in Elastic. Counters are sent as the worker reports them,
+    cumulative; a dashboard derives rates. It judges nothing: the performance monitor takes its own readings."""
 
     def __init__(self, worker: WorkerClient, elastic: ElasticClient, feed: ConditionFeed, *,
                  interval: float) -> None:

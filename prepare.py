@@ -53,8 +53,8 @@ ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # Keys every Elastic document already carries (agent/agent/metrics_exporter.py DOCUMENT_KEYS and
 # agent/agent/inventory.py RECORD_KEYS); neither a metric field nor an inventory field may take one.
-METRICS_DOCUMENT_KEYS = frozenset({"@timestamp", "at", "running_version", "updating", "hostname", "ipv4"})
-INVENTORY_RECORD_KEYS = frozenset({"at", "hostname", "ipv4"})
+METRICS_DOCUMENT_KEYS = frozenset({"@timestamp", "at", "running_version", "updating", "hostname", "ip", "cluster_name"})
+INVENTORY_RECORD_KEYS = frozenset({"at", "kind", "intf", "hostname", "ip", "cluster_name"})
 FEED_SOURCES = ("process_status", "updating", "running_version", "busy", "desired", "observed")
 
 # Never renamed: this script, the configs, the patch's own files. Folders never walked.

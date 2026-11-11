@@ -34,10 +34,16 @@ class FakeEs:
     """Raises the queued exceptions in order, then succeeds; records what was sent."""
     def __init__(self, *failures: Exception) -> None:
         self.failures = list(failures)
-        self.sent: list[tuple[str, dict[str, object]]] = []
+        self.sent: list[tuple] = []
+        self.deletes: list[dict[str, object]] = []
 
-    async def index(self, *, index: str, document: dict[str, object]) -> None:
-        self.sent.append((index, document))
+    async def index(self, *, index: str, document: dict[str, object], id: str | None = None) -> None:
+        self.sent.append((index, document) if id is None else (index, id, document))
+        if self.failures:
+            raise self.failures.pop(0)
+
+    async def delete_by_query(self, **kwargs: object) -> None:
+        self.deletes.append(kwargs)
         if self.failures:
             raise self.failures.pop(0)
 
@@ -48,7 +54,7 @@ class FakeEs:
 def client(tmp_path: Path, es: FakeEs) -> ElasticClient:
     cert = tmp_path / "elastic.cert"
     cert.write_text("cert")
-    host = HostInfo(hostname="box1", ipv4=IPv4Address("10.0.0.1"))
+    host = HostInfo(hostname="box1", ipv4=IPv4Address("10.0.0.1"), cluster_name="sg-prod")
     return ElasticClient(URL, host, cert_path=cert, api_key="key", metrics_index="m", host_index="h",
                          timeout=2, client=es)  # type: ignore[arg-type]
 
@@ -58,12 +64,40 @@ def test_documents_get_the_host_and_go_to_their_index(tmp_path: Path) -> None:
     c = client(tmp_path, es)
     asyncio.run(c.index_metrics({"a": 1}))
     asyncio.run(c.index_host({"b": 2}))
-    assert es.sent == [("m", {"a": 1, "hostname": "box1", "ipv4": "10.0.0.1"}),
-                       ("h", {"b": 2, "hostname": "box1", "ipv4": "10.0.0.1"})]
+    host = {"hostname": "box1", "ip": "10.0.0.1", "cluster_name": "sg-prod"}
+    assert es.sent == [("m", {"a": 1, **host}), ("h", {"b": 2, **host})]
+
+
+def test_host_documents_have_a_fixed_id_per_ip(tmp_path: Path) -> None:
+    es = FakeEs()
+    asyncio.run(client(tmp_path, es).put_host("intf_eth0", {"a": 1}))
+    assert es.sent == [("h", "10.0.0.1_intf_eth0", {"a": 1, "hostname": "box1", "ip": "10.0.0.1",
+                                                    "cluster_name": "sg-prod"})]
+
+
+def test_deleting_old_documents_keeps_the_current_ones_and_events(tmp_path: Path) -> None:
+    es = FakeEs()
+    asyncio.run(client(tmp_path, es).delete_other_host_docs(keep=["intf_eth0", "state"]))
+    [call] = es.deletes
+    assert call["index"] == "h"
+    query = call["query"]["bool"]                                   # type: ignore[index]
+    assert {"term": {"ip": "10.0.0.1"}} in query["should"]
+    assert {"term": {"ipv4": "10.0.0.1"}} in query["should"]        # documents from before the rename
+    assert query["minimum_should_match"] == 1
+    assert {"ids": {"values": ["10.0.0.1_intf_eth0", "10.0.0.1_state"]}} in query["must_not"]
+    assert {"exists": {"field": "event"}} in query["must_not"]      # agent_started stays
+
+
+def test_a_failed_delete_is_logged_and_never_raises(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    denied = api_error(ApiError, 403, {"error": {"type": "security_exception", "reason": "action [indices:data/write/delete/byquery] is unauthorized"}})
+    with caplog.at_level("WARNING", logger="agent.elastic"):
+        asyncio.run(client(tmp_path, FakeEs(denied)).delete_other_host_docs(keep=["state"]))
+    [record] = caplog.records
+    assert "deleting old documents" in record.getMessage() and "HTTP 403" in record.getMessage()
 
 
 def test_a_missing_cert_fails_startup(tmp_path: Path) -> None:
-    host = HostInfo(hostname="box1", ipv4=IPv4Address("10.0.0.1"))
+    host = HostInfo(hostname="box1", ipv4=IPv4Address("10.0.0.1"), cluster_name="sg-prod")
     with pytest.raises(FileNotFoundError, match="elastic CA certificate"):
         ElasticClient(URL, host, cert_path=tmp_path / "missing.cert", api_key="key",
                       metrics_index="m", host_index="h", timeout=2)

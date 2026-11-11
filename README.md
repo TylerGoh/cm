@@ -92,6 +92,9 @@ Python 3.12 with `venv`, systemd to run the service, and your internal pip index
 - The daemon's `FILE_SERVER_FETCH_TIMEOUT` is longer than the file server's `FILE_SERVER_UPSTREAM_TIMEOUT`.
 - Each agent's `CLUSTER_MANAGER_URL` is `http://<cluster manager host>:<daemon PORT>`.
 - The daemon's `NON_RESPONDING_SECONDS` is several of the agent's `HEARTBEAT_INTERVAL`.
+- `CLUSTER_NAME` (sent in every Elastic document) and `INTF` (a JSON list of interfaces,
+  e.g. `INTF='["eth0"]'`; one inventory record each) are required agent keys since v4: set
+  them in every agent `.env`, or under `env: agent:` in your `config.yaml`.
 - `HEARTBEAT_INTERVAL` is a required agent key since the release after v1: add
   `HEARTBEAT_INTERVAL: 10` under `env: agent:` in your `config.yaml` before applying that patch,
   or `prepare.py` stops.

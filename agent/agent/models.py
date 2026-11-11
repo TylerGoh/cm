@@ -13,6 +13,7 @@ class HostInfo:
     Nothing in the agent looks it up from the OS."""
     ipv4: IPv4Address
     hostname: str
+    cluster_name: str                            # sent in every Elastic document
 
 
 @dataclass(frozen=True, slots=True)

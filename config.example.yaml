@@ -45,7 +45,7 @@ worker:
   #   name         its key in the endpoint's JSON, exactly as the worker sends it
   #   field        its name in Elastic's metrics documents and in WorkerMetrics (snake_case), which
   #                agent/agent/performance.py reads; not one of at, running_version, updating,
-  #                hostname, ipv4
+  #                hostname, ip, cluster_name
   #   type         counter (cumulative since the worker started, a number) or gauge (a current
   #                value: a number, or a string such as "5d 18h", sent to Elastic as it is)
   #   description  optional; a comment after the field
@@ -69,12 +69,14 @@ worker:
           description: failed because lagged
 
 # --- inventory: the agent's record to Elastic's host index, every INVENTORY_INTERVAL ---
-# Every record already has at, hostname and ipv4; these fields are added. Each field has either
+# One record per interface in the agent's INTF, each with at, kind, intf, hostname, ip and
+# cluster_name; these fields are added. desired and observed go instead in the host's one state
+# document. Old documents of the host are deleted on every push. Each field has either
 #   source:  a value from the agent: process_status, updating, running_version, busy, or a whole
 #            state, sent flat with field as the prefix: desired (the last desired state:
 #            desired_version, desired_running, ...) or observed (the last heartbeat report:
 #            observed_healthy, observed_process_status, observed_updating, observed_busy, ...;
-#            the operations and ipv4 are left out). observed covers the single values above.
+#            the operations are left out). observed covers the single values above.
 #   env:     an agent .env key. An existing one (ETC_DIR, HOSTNAME, ...) is sent as it is; a new
 #            one is added to agent/config.py and agent/.env.example, so every agent .env must
 #            have it. type: str (default), int, float or bool.

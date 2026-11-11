@@ -30,8 +30,10 @@ class AgentConfig(BaseSettings):
         return (init_settings, dotenv_settings)          # init_settings lets tests pass values directly
 
     # host identity, set upstream by Foreman
-    ipv4: IPv4Address                    # the agent's identity in every heartbeat
+    ipv4: IPv4Address                    # the agent's identity in every heartbeat; ip in Elastic
     hostname: str
+    cluster_name: str                    # in every Elastic document
+    intf: Annotated[list[str], Field(min_length=1)]   # JSON list; one inventory record per interface
 
     # server (__main__); it always binds 0.0.0.0
     port: int
