@@ -2,14 +2,14 @@
 """Builds release zips into dist/. Versions are git tags v0, v1, ...
 
     python3 tools/make_patch.py              the next patch: newest tag vN to HEAD; tags HEAD v(N+1)
-                                             and writes dist/toolkit_cm-v(N+1)-patch.zip
+                                             and writes dist/patch_cm-v(N+1).zip
     python3 tools/make_patch.py --rebuild vN the patch v(N-1) -> vN again, without tagging
     python3 tools/make_patch.py --initial    the initial install at the newest tag:
                                              dist/toolkit_cm-initial.zip (VERSION inside)
     (push a new tag afterwards: git push origin vN)
 
 The patch zip:
-    toolkit_cm-vN-patch/
+    patch_cm-vN/
       prepare.py  config.example.yaml  README.txt  PATCH
       agent/  cluster-manager/  file-server/  root/     each: apply.sh  PATCH  old/  new/  [DELETED.txt]
 Each folder holds the files that changed under that service folder (root/ for the top level,
@@ -32,7 +32,8 @@ SERVICES = {                    # folder -> a file that must exist in its instal
     "cluster-manager": "cluster_manager/client/cli.py",
     "file-server": "file_server/file_server.py",
 }
-RELEASE_NAME = "toolkit_cm"     # zip names and their top folder (unlike the code's cluster_manager)
+RELEASE_NAME = "toolkit_cm"     # the initial zip and its top folder (unlike the code's cluster_manager)
+PATCH_NAME = "patch_cm"         # a patch zip and its top folder: patch_cm-vN
 ROOT_MARKER = "prepare.py"      # root/ applies to a whole install's top folder
 ALWAYS_CARRIED = [              # every config.yaml-generated file
     "agent/agent/worker_client.py", "agent/agent/inventory.py", "agent/config.py", "agent/.env.example",
@@ -101,28 +102,14 @@ def readme(frm: str, to: str, folders: list[str], subjects: list[str]) -> str:
         "",
         *[f"  {s}" for s in subjects],
         "",
-        "All at once, on your prepared install folder (the one holding config.yaml):",
+        f"Apply it to your prepared install folder (the one holding config.yaml):",
         f"       bash apply.sh /path/to/{RELEASE_NAME}",
-        "   It prepares this patch with that folder's config.yaml, checks every service, and applies",
-        "   them all, or changes nothing if any check fails (--force replaces locally changed files).",
-        "   Then it runs that folder's prepare.py, so config.yaml changes (new renames included) reach",
-        "   the install. Run it again after editing config.yaml. Then commit and push the result.",
-        "",
-        "Or by hand, one box at a time:",
-        "1. Copy your config.yaml into this folder (next to prepare.py) and run:",
-        "       python3 prepare.py",
-        "   It renames the terms and writes the generated code in every folder below, and writes",
-        "   the .env of each service that has one here (at the top of that folder) to copy out.",
-        "2. Copy each folder to the box that runs it and run its apply.sh on the installed folder:",
-    ]
-    for folder in folders:
-        target = f"/path/to/{RELEASE_NAME} (a whole install's top folder)" if folder == "root" else f"/opt/{folder}"
-        lines.append(f"       {folder}/:  bash apply.sh {target}")
-    lines += [
-        "   apply.sh checks every file is still at " + frm + " and changes nothing if one isn't (add",
-        "   --force to replace it anyway). It backs up what it replaces to <target>/.patches/" + to + "/",
-        "   and warns about .env keys the new version adds or no longer uses.",
-        "3. Restart the services that were patched.",
+        "It uses only that folder's config.yaml: never put one in this patch. It prepares the patch",
+        f"from it, checks every service ({', '.join(folders)}) is still at {frm}, and applies them all,",
+        "or changes nothing if any check fails (--force replaces locally changed files, backed up to",
+        f"<folder>/.patches/{to}/). Then it runs that folder's prepare.py, so config.yaml changes reach",
+        "the install. Run it again after editing config.yaml.",
+        "Then commit, deploy each patched service from the install folder and restart it.",
         "",
     ]
     return "\n".join(lines)
@@ -131,7 +118,8 @@ def readme(frm: str, to: str, folders: list[str], subjects: list[str]) -> str:
 APPLY_SH = r'''#!/usr/bin/env bash
 # Applies this folder's patch to an installed folder:   bash apply.sh [--force] [--check] TARGET
 # --check: only the checks below; changes nothing, exits 1 if applying would be refused.
-# Run prepare.py (one level up) first. Checks every file in TARGET against old/ (outside the
+# Internal: run only by the patch's top-level apply.sh, which prepares the patch from the install
+# folder's config.yaml first. Checks every file in TARGET against old/ (outside the
 # generated blocks) and changes nothing if any differs, unless --force. Backs up what it replaces
 # to TARGET/.patches/<version>/, copies new/ in, removes what DELETED.txt lists, and warns about
 # .env keys added or no longer used. Never touches a .env.
@@ -149,7 +137,8 @@ for arg in "$@"; do
   esac
 done
 [[ -n "$TARGET" ]] || { echo "usage: bash apply.sh [--force] TARGET   (the installed $SERVICE folder)" >&2; exit 2; }
-[[ -f "$HERE/PREPARED" ]] || { echo "$SERVICE $TO: not prepared; run prepare.py with your config.yaml first" >&2; exit 1; }
+[[ "${PATCH_CM_APPLY_ALL:-}" == 1 ]] || { echo "$SERVICE $TO: run the patch's top-level apply.sh on your install folder, not this one" >&2; exit 1; }
+[[ -f "$HERE/PREPARED" ]] || { echo "$SERVICE $TO: not prepared; run the patch's top-level apply.sh" >&2; exit 1; }
 TARGET=$(cd "$TARGET" && pwd)
 [[ -f "$TARGET/$MARKER" ]] || { echo "$SERVICE $TO: $TARGET has no $MARKER; is it the $SERVICE folder?" >&2; exit 1; }
 echo "$SERVICE $FROM -> $TO on $TARGET"
@@ -216,8 +205,8 @@ echo "$SERVICE $TO applied; old files are in $BACKUP."
 APPLY_ALL_SH = r'''#!/usr/bin/env bash
 # Applies the whole patch to a prepared install folder (the one holding prepare.py, config.yaml,
 # agent/, cluster-manager/, file-server/), in one go:   bash apply.sh [--force] INSTALL_FOLDER
-# 1. Prepares this patch with INSTALL_FOLDER/config.yaml (or a config.yaml already here), on every
-#    run, using the names INSTALL_FOLDER was prepared with, so old/ matches it.
+# 1. Prepares this patch with INSTALL_FOLDER/config.yaml, the only config.yaml it ever uses, on
+#    every run, using the names INSTALL_FOLDER was prepared with, so old/ matches it.
 #    Needs python3 with pyyaml and pydantic ($PYTHON to choose another).
 # 2. Checks every service folder first; if any would be refused, nothing changes (--force
 #    replaces locally changed files, backed up).
@@ -243,13 +232,10 @@ ROOT=$(cd "$TARGET" && pwd)
 TO=$(sed -n 's/^to=//p' "$HERE/PATCH")
 
 # Every run prepares again from the install folder's current config.yaml, so an edit to it is
-# always picked up (a config.yaml here is used only when the install folder has none).
-if [[ -f "$ROOT/config.yaml" ]]; then
-  cp "$ROOT/config.yaml" "$HERE/config.yaml"
-elif [[ ! -f "$HERE/config.yaml" ]]; then
-  echo "no config.yaml in $ROOT or $HERE" >&2; exit 1
-fi
-"$PYTHON" "$HERE/prepare.py" --renames-of "$ROOT"
+# always picked up. Nothing else is ever used: prepare.py refuses a config.yaml in this folder.
+[[ -f "$ROOT/config.yaml" ]] || { echo "no $ROOT/config.yaml; the patch uses only that one" >&2; exit 1; }
+"$PYTHON" "$HERE/prepare.py" --install "$ROOT"
+export PATCH_CM_APPLY_ALL=1                 # the per-service apply.sh files run only from here
 
 target_of() { if [[ "$1" == root ]]; then echo "$ROOT"; else echo "$ROOT/$1"; fi; }
 FOLDERS=()
@@ -273,11 +259,7 @@ for folder in "${FOLDERS[@]}"; do
 done
 
 echo "== preparing $ROOT with its config.yaml"
-if [[ -f "$ROOT/config.yaml" ]]; then
-  "$PYTHON" "$ROOT/prepare.py"
-else
-  echo "no $ROOT/config.yaml: the install keeps its current names and generated code"
-fi
+"$PYTHON" "$ROOT/prepare.py"
 echo "$TO applied to $ROOT. Commit it (git status shows what changed), then deploy and restart."
 '''
 
@@ -288,7 +270,7 @@ def build_patch(frm: str, to: str) -> Path:
     for path in changed_paths(frm, to):
         by_folder.setdefault(split(path)[0], []).append(path)
     folders = sorted(by_folder, key=lambda f: (f == "root", f))
-    top = f"{RELEASE_NAME}-{to}-patch"
+    top = f"{PATCH_NAME}-{to}"
     OUT.mkdir(exist_ok=True)
     out = OUT / f"{top}.zip"
     with zipfile.ZipFile(out, "w") as z:

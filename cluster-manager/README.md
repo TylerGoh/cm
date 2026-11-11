@@ -6,7 +6,7 @@ Mattermost. One per cluster.
 
 ## What the box needs
 
-- Python 3.12 with `venv`, and a pip index (PyPI, or `PIP_INDEX_URL`).
+- Python 3.12 with `venv`, and your internal pip index (`PIP_INDEX_URL` or `pip.conf`); every dependency is installed by name from it, never from a URL.
 - Podman with Quadlet (podman 4.4 or later) and the Bitnami PostgreSQL image, for the database.
 - The file server running and reachable at `FILE_SERVER_URL`. The daemon's first start fetches
   `BOOTSTRAP_VERSION` through it, and fails without it.

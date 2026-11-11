@@ -6,7 +6,8 @@ no routes. One per worker box.
 
 ## What the box needs
 
-- Python 3.12 with `venv`, and a pip index (PyPI, or `PIP_INDEX_URL`).
+- Python 3.12 with `venv`, and your internal pip index (`PIP_INDEX_URL` or `pip.conf`); every dependency is installed by name from it, never from a URL. Besides the usual web stack the agent needs
+  `elasticsearch`, `elastic-transport`, `urllib3`, `python-dateutil` and `tzdata` there.
 - The worker's default install: the binary in `WORKER_COMMAND`, `ETC_DIR` and `HYPERTREE_DIR`.
   The agent never installs the worker.
 - The Elastic CA certificate at `ELASTIC_CERT_PATH`. The agent won't start without it.

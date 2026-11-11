@@ -53,7 +53,7 @@ Releases are numbered v0, v1, v2, ..., one git tag each. The initial install is 
 a version; every later version is a patch from the one before it:
 
 ```bash
-python3 tools/make_patch.py        # commit first; tags HEAD v<N+1>, writes dist/toolkit_cm-v<N+1>-patch.zip
+python3 tools/make_patch.py        # commit first; tags HEAD v<N+1>, writes dist/patch_cm-v<N+1>.zip
 git push origin v<N+1>
 ```
 
@@ -61,30 +61,30 @@ The patch zip holds `prepare.py`, an `apply.sh`, a `README.txt` with the steps, 
 per service that changed (`root/` for the top level), each with `old/` and `new/` copies and its
 own `apply.sh`.
 
-**All at once, on your prepared install folder** (kept in git, with `config.yaml` in it):
+**Apply it to your prepared install folder** (kept in git, with `config.yaml` in it):
 
 ```bash
-bash toolkit_cm-v<N>-patch/apply.sh ~/toolkit_cm        # --force replaces locally changed files
+bash patch_cm-v<N>/apply.sh ~/toolkit_cm        # --force replaces locally changed files
 cd ~/toolkit_cm && git status && git commit -am v<N>          # then push and deploy each service
 ```
 
-It prepares the patch with that folder's `config.yaml`, checks every service folder against the
+It prepares the patch with that folder's `config.yaml`, the only one a patch ever uses (a
+`config.yaml` inside the unzipped patch is refused), checks every service folder against the
 previous version (outside the generated blocks), and applies them all, or changes nothing if any
 check fails. `config.yaml`, `PREPARED`, the `.env` files and the `.patches/` backups are
 git-ignored, so `git status` shows only the patch.
 
-**Or one box at a time:** copy your `config.yaml` into the unzipped patch, run
-`python3 prepare.py`, copy each folder to its box and run `bash apply.sh /opt/<service>`. It
-backs up to `/opt/<service>/.patches/vN/` and lists `.env` keys added or no longer used. It never
-touches a `.env`. Restart the patched services.
+Replaced files are backed up to `<service>/.patches/vN/`; a `.env` is never touched, and keys
+added or no longer used are listed. The per-service `apply.sh` files run only from the top-level
+one. Then deploy each patched service from the install folder and restart it.
 
 The agent's generated files travel with every agent patch, so a changed `config.yaml` reaches
 the boxes with the next patch.
 
 ## Every machine needs
 
-Python 3.12 with `venv`, a pip index (PyPI, or `PIP_INDEX_URL`), and systemd to run the
-service. The units expect each folder at `/opt/<folder>` and run as root.
+Python 3.12 with `venv`, systemd to run the service, and your internal pip index
+(`PIP_INDEX_URL` or `pip.conf`): every dependency is installed by name from it, never from a URL. The units expect each folder at `/opt/<folder>` and run as root.
 
 ## How the settings connect
 

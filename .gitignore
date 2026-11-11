@@ -10,3 +10,6 @@ postgres.env
 .agents/
 .claude/
 skills-lock.json
+
+# uv: a local lock with public download URLs; installs use pip and your own index
+uv.lock

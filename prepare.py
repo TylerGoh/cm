@@ -5,12 +5,14 @@ blocks (the worker contract, the inventory fields and their agent settings).
     cp /path/to/your/config.yaml .      # next to this script
     python3 prepare.py                  # needs pyyaml and pydantic (pip install pyyaml pydantic)
     python3 prepare.py --check          # validates config.yaml, changes nothing
-    python3 prepare.py --renames-of DIR # renames as DIR was prepared, not as config.yaml says
-                                        # (the patch's apply.sh uses it on the install folder)
+
+In a patch it runs only from the patch's apply.sh, as  prepare.py --install DIR : it reads
+DIR/config.yaml and renames as DIR was prepared. A patch never has a config.yaml of its own, so
+it can't be prepared with a stale or wrong copy.
 
 It works on both kinds of folder it ships in:
   - the initial install (toolkit_cm/: agent/, cluster-manager/, file-server/, ...)
-  - a patch (toolkit_cm-vN-patch/: a PATCH file, and <folder>/old/ and <folder>/new/ copies)
+  - a patch (patch_cm-vN/: a PATCH file, and <folder>/old/ and <folder>/new/ copies)
 
 Running it again with the same config.yaml is safe: the renames are already done and the blocks
 are written again. New `rename:` keys are added to a folder already prepared; changing one it
@@ -235,7 +237,7 @@ def unknown_keys(model: type[BaseModel], data: Any, where: str) -> list[str]:
 def load_config(path: Path) -> tuple[Config, dict[str, str], str]:
     """The config, the renames to apply (placeholder -> name), and the file's sha256."""
     if not path.exists():
-        raise SystemExit(f"prepare: no {path.name} next to prepare.py; copy yours into {path.parent}")
+        raise SystemExit(f"prepare: no {path.name} in {path.parent}")
     raw_bytes = path.read_bytes()
     try:
         raw = yaml.safe_load(raw_bytes)
@@ -733,14 +735,30 @@ def main(argv: list[str]) -> int:
     args = argv[1:]
     check_only = "--check" in args
     root = HERE
-    config, renames, sha = load_config(root / CONFIG_NAME)
-    if "--renames-of" in args:
-        # A patch for a prepared install: use the names the install has, so old/ matches it.
-        # The install takes any new rename: when its own prepare.py runs after the patch.
-        index = args.index("--renames-of") + 1
+    install: Path | None = None
+    if "--install" in args:
+        index = args.index("--install") + 1
         if index >= len(args):
-            raise SystemExit("prepare: --renames-of needs a folder")
-        installed = previous_renames(Path(args[index]))
+            raise SystemExit("prepare: --install needs the install folder")
+        install = Path(args[index]).resolve()
+    if (root / "PATCH").exists():
+        # A patch uses only the install folder's config.yaml, never a copy here.
+        if install is None:
+            raise SystemExit("prepare: this is a patch; apply it with its apply.sh, which prepares it "
+                             "from the install folder's config.yaml:  bash apply.sh /path/to/install")
+        if (root / CONFIG_NAME).exists():
+            raise SystemExit(f"prepare: remove {root / CONFIG_NAME}; a patch uses only "
+                             f"{install / CONFIG_NAME}")
+        config_path = install / CONFIG_NAME
+    elif install is not None:
+        raise SystemExit("prepare: --install is only for a patch")
+    else:
+        config_path = root / CONFIG_NAME
+    config, renames, sha = load_config(config_path)
+    if install is not None:
+        # Use the names the install has, so old/ matches it. The install takes any new rename
+        # when its own prepare.py runs after the patch.
+        installed = previous_renames(install)
         if installed is not None:
             renames = dict(sorted(((k, v) for k, v in installed.items() if k in PLACEHOLDERS),
                                   key=lambda item: len(item[0]), reverse=True))
@@ -787,7 +805,7 @@ def main(argv: list[str]) -> int:
     if unset:
         print(f"new agent settings from inventory: {', '.join(unset)}; set them in every agent .env "
               f"(or under env.agent in {CONFIG_NAME})")
-    print("prepared" + (": copy each folder to its box and run its apply.sh" if (root / "PATCH").exists() else ""))
+    print("prepared")
     return 0
 
 

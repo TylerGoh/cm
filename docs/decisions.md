@@ -182,6 +182,11 @@ Why: the owner wants the raw metrics in Elastic on a fixed cadence; the worker's
 Why: the Elastic cluster requires an API key. `SecretStr` keeps the key out of reprs and logs; it is unwrapped only where the client is built.
 Cost: a wrong or revoked key only shows as logged write failures (401), since Elastic writes never raise; documents are lost until the key is fixed.
 
+**The official async Elasticsearch client replaces raw httpx (2026-11-11).**
+`ElasticClient` wraps `AsyncElasticsearch` with `api_key` and `ca_certs`, on its httpx node, with no retries. Each failure is logged as what went wrong (Elastic's error type and reason, TLS, timeout, refused connection) when it starts and when it changes, per index.
+Why: the owner wanted the standard client and better error handling; the raw client's errors didn't say why a write failed. Async keeps the event loop free; the httpx node avoids aiohttp.
+Cost: five more packages on the internal index (`elasticsearch`, `elastic-transport`, `urllib3`, `python-dateutil`, `tzdata`), and the client's major version must match the cluster's.
+
 ## Agent app
 
 - FastAPI under uvicorn, passing the app object (rules out multiple workers and reload). Wiring is a lifespan.
@@ -280,5 +285,9 @@ Why: the proprietary parts (names, worker contract, what is sent to Elastic, set
 **`check_wire.sh` compares the two `wire.py` copies (2026-11-05).**
 Run by hand before a release; a difference fails with the diff.
 Why: the copies live in separate projects, so no single install or test sees both.
+
+**A patch uses only the install folder's config.yaml (2026-11-11).**
+Patches are `patch_cm-vN.zip`. Its `apply.sh INSTALL_FOLDER` is the only way to apply one: it runs the patch's `prepare.py --install INSTALL_FOLDER`, which reads `INSTALL_FOLDER/config.yaml` and refuses a `config.yaml` inside the patch; the per-service `apply.sh` files run only from it. The by-hand route (copy a config into the patch, apply per box) is gone.
+Why: a config copied into a patch could be stale or another install's, and the patch would then rename and generate wrong without any check failing. One source rules that out.
 
 **Step names are the method names (2026-11-05).** `start` and `stop`; nothing depends on the earlier `spawn_process` and `kill_instance`.
