@@ -353,6 +353,7 @@ Code: `agent/worker_client.py` (`MetricSource`, `MetricType`, `WorkerMetrics`, `
 - Every request URL is the base URL with a command appended as-is: `base_url + command`, nothing added between them. The base URL (`config.worker_url`) ends where the command name goes, typically in a query such as `http://127.0.0.1:9000/api?command=`, so the commands have no leading slash, and `prepare.py` refuses one that has. `WorkerClient` keeps the base URL itself and builds each URL in `_url(command)`; its `httpx` client has no `base_url`, because `httpx` always adds a `/` to one, which would turn `...?command=` into `...?command=/show_version`. Nothing checks the base URL's shape.
 - The constructor is `WorkerClient(base_url, *, timeout, reload_timeout, transport)`. Each reload phase uses its own, longer `reload_timeout`; every other call uses `timeout`. `transport` is for tests (`httpx.MockTransport`).
 - One `WorkerClient` is built in the lifespan and passed directly to `ProcessManager`, `UpdateManager`, `HealthMonitor`, `PerformanceMonitor` and the `Supervisor`, sharing one connection pool.
+- Counters are `float`. Gauges are `float | str`: a number becomes a float, and a string (`"5d 18h"`) is kept as the worker sent it and exported as it is. Only counters feed `performance.py`.
 - Every `WorkerMetrics` field declares three things: a `MetricType` (`COUNTER` or `GAUGE`), a `MetricSource` (the command that returns it), and its name in that command's answer (`validation_alias`, a real Pydantic parameter). `MetricType` and `MetricSource` are plain metadata that Pydantic ignores.
 - A metric has exactly two names. The intake name is the worker's JSON key (`requests.out.total`), the `validation_alias`, used only to read the worker's answer. The field name (`requests_out_total`) is its name everywhere after that: in the agent's code and in Elastic's metrics documents. There is no third, Elastic-only name.
 - `_derive()` runs at import. It builds `METRIC_SOURCES` (command → names in its answer), `COUNTER_FIELDS` and `GAUGE_FIELDS` (agent-side field names), and raises `TypeError` if a field lacks a `MetricSource`, a `MetricType` or a string alias, or if an alias is used twice.
@@ -361,7 +362,7 @@ Code: `agent/worker_client.py` (`MetricSource`, `MetricType`, `WorkerMetrics`, `
 
 How `metrics()` works:
 - It fetches every endpoint in `METRIC_SOURCES` concurrently with `gather(..., return_exceptions=True)`. It's all or nothing, so one reading describes one instant.
-- It copies only the declared source names from each endpoint's payload. If any are missing, it returns `None`, and logs the endpoint and the names once: not again until a reading has every name, which it logs too.
+- Every metric in an answer is wrapped, `{"value": x}`; it takes `x` for each declared name only. An entry that isn't an object with a `value` key logs an error and returns `None`. If any names are missing, it returns `None`, and logs the endpoint and the names once: not again until a reading has every name, which it logs too.
 - `WorkerMetrics.model_validate(values)` renames the dotted names to field names through the aliases.
 - A network failure returns `None` silently; a validation failure logs and returns `None`.
 - Downstream, the reading is flat and dot-free, so it exports cleanly.

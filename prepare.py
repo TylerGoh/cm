@@ -447,7 +447,7 @@ def worker_block(worker: WorkerSpec, commands: dict[str, str], rename: Renamer) 
         f"RELOAD_PHASE1_COMMAND = {b.value(quoted(commands[worker.reload_phase1_command]))}    # blocks until done; success means done",
         f"RELOAD_PHASE2_COMMAND = {b.value(quoted(commands[worker.reload_phase2_command]))}    # blocks until the worker runs the new code",
         "",
-        "# Metric commands: each answers one flat JSON object.",
+        "# Metric commands: each answers one JSON object, every metric wrapped as {\"value\": ...}.",
     ]
     for endpoint in worker.endpoints:
         b.lines.append(f"{b.value(endpoint_constant(endpoint))} = MetricSource({b.value(quoted(commands[endpoint.command]))})")
@@ -455,15 +455,19 @@ def worker_block(worker: WorkerSpec, commands: dict[str, str], rename: Renamer) 
         "",
         "",
         "class WorkerMetrics(BaseModel):",
-        '    """One flat reading of the worker at one instant. Every field declares a MetricType,',
-        '    a MetricSource and the name it has in that command\'s answer (validation_alias)."""',
+        '    """One flat reading of the worker at one instant, each value already taken out of its',
+        '    {"value": ...}. Every field declares a MetricType, a MetricSource and the name it has in',
+        '    that command\'s answer (validation_alias). Counters are numbers; a gauge is a number or a',
+        '    string, kept as the worker sent it."""',
         "    model_config = ConfigDict(frozen=True)",
     ]
     for endpoint in worker.endpoints:
         b.lines += ["", f"    # {b.value(endpoint.command)}"]
         for metric in endpoint.metrics:
-            kind = "MetricType.COUNTER" if metric.type is MetricKind.COUNTER else "MetricType.GAUGE"
-            line = (f"    {b.value(f'{metric.field}:'.ljust(width))} Annotated[float, {kind}, "
+            # a counter is always a number; a gauge may be a string the worker formats, e.g. "5d 18h"
+            kind, py_type = (("MetricType.COUNTER", "float") if metric.type is MetricKind.COUNTER
+                             else ("MetricType.GAUGE", "float | str"))
+            line = (f"    {b.value(f'{metric.field}:'.ljust(width))} Annotated[{py_type}, {kind}, "
                     f"{b.value(endpoint_constant(endpoint))}, Field(validation_alias={b.value(quoted(metric.name))})]")
             if metric.description:
                 line += f"    # {b.value(metric.description)}"
@@ -509,21 +513,29 @@ def inventory_block(inventory: InventorySpec, settings: set[str], rename: Rename
     return b.text()
 
 
+def by_type(fields: list[InventoryFieldSpec]) -> list[tuple[SettingType, list[InventoryFieldSpec]]]:
+    """The new settings grouped by type, in SettingType order; each group keeps config.yaml's order."""
+    return [(t, group) for t in SettingType if (group := [f for f in fields if f.type is t])]
+
+
 def config_py_block(inventory: InventorySpec, settings: set[str], rename: Renamer, indent: str) -> str:
-    lines = []
-    for f in new_settings(inventory, settings, rename):
-        lines.append(f"{indent}{f.env.lower()}: {f.type.value}".ljust(41)
-                     + f"# sent to the host index as {f.field}")
-    return "\n".join(lines) + ("\n" if lines else "")
+    groups = []
+    for setting_type, fields in by_type(new_settings(inventory, settings, rename)):
+        groups.append([f"{indent}# {setting_type.value}"]
+                      + [f"{indent}{f.env.lower()}: {setting_type.value}" for f in fields])
+    return "".join("\n".join(g) + "\n" for g in join_groups(groups))
 
 
 def env_example_block(inventory: InventorySpec, settings: set[str], rename: Renamer) -> str:
-    lines = []
-    for f in new_settings(inventory, settings, rename):
-        note = f" ({f.description})" if f.description else ""
-        lines.append(f"# {f.type.value}, sent to the host index as {f.field}{note}")
-        lines.append(f"{f.env}=")
-    return "\n".join(lines) + ("\n" if lines else "")
+    groups = []
+    for setting_type, fields in by_type(new_settings(inventory, settings, rename)):
+        groups.append([f"# {setting_type.value}"] + [f"{f.env}=" for f in fields])
+    return "".join("\n".join(g) + "\n" for g in join_groups(groups))
+
+
+def join_groups(groups: list[list[str]]) -> list[list[str]]:
+    """A blank line between groups."""
+    return [g if i == 0 else [""] + g for i, g in enumerate(groups)]
 
 
 def write_blocks(path: Path, config: Config, commands: dict[str, str], settings: set[str],

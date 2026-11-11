@@ -40,12 +40,14 @@ worker:
   reload_phase1_command: reload_phase1   # GET, no body, blocks until phase 1 is done
   reload_phase2_command: reload_phase2   # GET, no body, blocks until the worker runs the new code
 
-  # Each endpoint is a command that answers one flat JSON object; one may mix counters and gauges.
+  # Each endpoint is a command that answers one JSON object, each metric wrapped as {"value": ...};
+  # one may mix counters and gauges.
   #   name         its key in the endpoint's JSON, exactly as the worker sends it
   #   field        its name in Elastic's metrics documents and in WorkerMetrics (snake_case), which
   #                agent/agent/performance.py reads; not one of at, running_version, updating,
   #                hostname, ipv4
-  #   type         counter (cumulative since the worker started) or gauge (a current value)
+  #   type         counter (cumulative since the worker started, a number) or gauge (a current
+  #                value: a number, or a string such as "5d 18h", sent to Elastic as it is)
   #   description  optional; a comment after the field
   # An endpoint's Python name comes from its command (stats.queue -> STATS_QUEUE_ENDPOINT); give
   # `constant: SOME_NAME_ENDPOINT` to choose it. Every field and every name is unique.

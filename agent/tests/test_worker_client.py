@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from agent.worker_client import (
-    METRIC_SOURCES, RELOAD_PHASE1_COMMAND, RELOAD_PHASE2_COMMAND, VERSION_COMMAND, WorkerClient,
+    METRIC_SOURCES, RELOAD_PHASE1_COMMAND, RELOAD_PHASE2_COMMAND, VERSION_COMMAND, WorkerClient, WorkerMetrics,
 )
 
 type Handler = Callable[[httpx.Request], httpx.Response]
@@ -46,7 +46,7 @@ def command_of(request: httpx.Request) -> str:
 
 
 def full_payloads() -> dict[str, dict[str, object]]:
-    return {filled(command): {name: 1.0 for name in names} for command, names in METRIC_SOURCES.items()}
+    return {filled(command): {name: {"value": 1.0} for name in names} for command, names in METRIC_SOURCES.items()}
 
 
 def serve(payloads: dict[str, dict[str, object]]) -> Handler:
@@ -81,7 +81,7 @@ def test_metrics_reads_every_endpoint():
 
 def test_metrics_ignores_undeclared_names():
     payloads = full_payloads()
-    next(iter(payloads.values()))["something.else"] = 1.0
+    next(iter(payloads.values()))["something.else"] = {"value": 1.0}
     assert asyncio.run(client(serve(payloads)).metrics()) is not None
 
 
@@ -122,8 +122,31 @@ def test_metrics_network_failure_is_none():
 def test_metrics_invalid_value_is_none():
     payloads = full_payloads()
     first = next(iter(payloads.values()))
-    first[next(iter(first))] = "not a number"
+    first[next(iter(first))] = {"value": "not a number"}      # every declared metric today is a counter
     assert asyncio.run(client(serve(payloads)).metrics()) is None
+
+
+def test_metrics_are_unwrapped():
+    payloads = full_payloads()
+    for answer in payloads.values():
+        for i, name in enumerate(sorted(answer)):
+            answer[name] = {"value": i}
+    reading = asyncio.run(client(serve(payloads)).metrics())
+    assert reading is not None
+    by_alias = {info.validation_alias: getattr(reading, field) for field, info in WorkerMetrics.model_fields.items()}
+    for answer in payloads.values():
+        for name, entry in answer.items():
+            assert by_alias[name] == entry["value"]
+
+
+@pytest.mark.parametrize("entry", [1.0, "5d 18h", None, {}, {"val": 1.0}])
+def test_metrics_not_wrapped_is_none(entry: object, caplog: pytest.LogCaptureFixture):
+    payloads = full_payloads()
+    first = next(iter(payloads.values()))
+    first[next(iter(first))] = entry
+    with caplog.at_level("ERROR", logger="agent.worker"):
+        assert asyncio.run(client(serve(payloads)).metrics()) is None
+    assert caplog.records
 
 
 # --- version and health (the same endpoint) ---

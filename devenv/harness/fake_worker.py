@@ -1,8 +1,8 @@
 """A fake worker: a real process the agent spawns, that answers the worker contract.
 
     GET /api?command=show_version     [["type","version","active"],["app",<loaded version>,"Y"]]
-    GET /api?command=counters         {"requests.out.total": .., "requests.old_failed.total": ..,
-                                       "requests.out_lagged.total": ..}, cumulative
+    GET /api?command=counters         {"requests.out.total": {"value": ..}, "requests.old_failed.total":
+                                       {"value": ..}, "requests.out_lagged.total": {"value": ..}}, cumulative
     GET /api?command=reload_phase1    reads the version the agent linked under etc/ (slow)
     GET /api?command=reload_phase2    switches to it and generates a hypertree (slow)
     GET /control?...                  for the scenarios, never the agent:
@@ -73,7 +73,7 @@ class Worker:
         low, high = self.delays.get(name, (0.0, 0.0))
         time.sleep(min(random.uniform(low, high), MAX_DELAY))
 
-    def counters(self) -> dict[str, float]:
+    def counters(self) -> dict[str, dict[str, float]]:
         with self.lock:
             now = time.monotonic()
             intake = (now - self.last) * REQUESTS_PER_SECOND
@@ -82,9 +82,9 @@ class Worker:
             self.out += intake - failed
             self.old_failed += failed * 0.6
             self.lagged += failed * 0.4
-            return {"requests.out.total": round(self.out),
-                    "requests.old_failed.total": round(self.old_failed),
-                    "requests.out_lagged.total": round(self.lagged)}
+            return {"requests.out.total": {"value": round(self.out)},
+                    "requests.old_failed.total": {"value": round(self.old_failed)},
+                    "requests.out_lagged.total": {"value": round(self.lagged)}}
 
     def make_hypertree(self) -> None:
         """Loading a version generates its hypertree: one folder named by a hash."""

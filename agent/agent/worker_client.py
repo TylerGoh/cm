@@ -29,13 +29,15 @@ VERSION_COMMAND = "show_version"           # version() and health() both use it
 RELOAD_PHASE1_COMMAND = "reload_phase1"    # blocks until done; success means done
 RELOAD_PHASE2_COMMAND = "reload_phase2"    # blocks until the worker runs the new code
 
-# Metric commands: each answers one flat JSON object.
+# Metric commands: each answers one JSON object, every metric wrapped as {"value": ...}.
 COUNTERS_ENDPOINT = MetricSource("counters")
 
 
 class WorkerMetrics(BaseModel):
-    """One flat reading of the worker at one instant. Every field declares a MetricType,
-    a MetricSource and the name it has in that command's answer (validation_alias)."""
+    """One flat reading of the worker at one instant, each value already taken out of its
+    {"value": ...}. Every field declares a MetricType, a MetricSource and the name it has in
+    that command's answer (validation_alias). Counters are numbers; a gauge is a number or a
+    string, kept as the worker sent it."""
     model_config = ConfigDict(frozen=True)
 
     # counters
@@ -102,7 +104,8 @@ class WorkerClient:
 
     async def metrics(self) -> WorkerMetrics | None:
         """All or nothing: one reading describes one instant. Returns None on any failure.
-        Missing names are logged once, and again only after a reading had every name."""
+        Every metric arrives wrapped, {"value": x}; x is what's validated. Missing names are
+        logged once, and again only after a reading had every name."""
         commands = list(METRIC_SOURCES)
         results = await asyncio.gather(*(self._get_json(c) for c in commands), return_exceptions=True)
 
@@ -119,7 +122,12 @@ class WorkerClient:
                                 command, sorted(missing))
                     self._names_missing = True
                 return None
-            values.update({name: payload[name] for name in METRIC_SOURCES[command]})   # declared names only
+            for name in METRIC_SOURCES[command]:     # declared names only
+                entry = payload[name]
+                if not isinstance(entry, dict) or "value" not in entry:
+                    log.error("%s: %s is %r, not {\"value\": ...}", command, name, entry)
+                    return None
+                values[name] = entry["value"]
 
         if self._names_missing:
             log.info("worker metrics have every name again")
