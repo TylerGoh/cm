@@ -42,7 +42,9 @@ def test_a_running_worker_is_exported_under_the_field_names() -> None:
     m, _, elastic = exporter(ProcessStatus.RUNNING, values)
     asyncio.run(m._step())
     [document] = elastic.documents
-    assert document["running_version"] == "job_7" and document["updating"] is False and "at" in document
+    assert document["running_version"] == "job_7" and document["updating"] is False
+    assert document["@timestamp"] == document["at"]                 # one instant, in UTC
+    assert document["@timestamp"].endswith("+00:00")
     for field in WorkerMetrics.model_fields:                       # the Elastic name is the field name
         assert document[field] == getattr(values, field)
     worker_names = {name for names in METRIC_SOURCES.values() for name in names}

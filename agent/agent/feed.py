@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from agent.wire import ProcessStatus
+from agent.wire import DesiredState, HeartbeatReport, ProcessStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -10,6 +10,8 @@ class Conditions:
     busy: bool                              # any operation is running
     updating: bool                          # the running operation is an update
     running_version: str | None             # only fetched while RUNNING
+    desired: DesiredState | None = None     # the last desired state accepted; None before the first
+    observed: HeartbeatReport | None = None # the agent's state as its heartbeat reports it
 
 
 class ConditionFeed:

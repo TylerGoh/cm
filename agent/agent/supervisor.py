@@ -73,6 +73,7 @@ class Supervisor:
         self.last_operation: OperationView | None = None  # in memory only
         self._active: ActiveOperation | None = None
         self._last_observed: Observed | None = None
+        self._last_desired: DesiredState | None = None   # kept through failed or stale heartbeats
         self._sync_failures = 0
 
     async def heartbeat_tick(self) -> None:
@@ -104,6 +105,8 @@ class Supervisor:
             busy=active is not None,
             updating=active is not None and active.type in UPDATING_OPS,
             running_version=observed.running_version,
+            desired=self._last_desired,
+            observed=self._report(observed),             # built now, so a finished operation shows
         ))
 
     # --- heartbeat ---
@@ -124,6 +127,7 @@ class Supervisor:
             return None                                  # stale
         if desired.generation > acknowledged:
             self._set_memory(acknowledged_generation=desired.generation)
+        self._last_desired = desired
         return desired
 
     def _report(self, observed: Observed) -> HeartbeatReport:

@@ -53,9 +53,9 @@ ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 # Keys every Elastic document already carries (agent/agent/metrics_exporter.py DOCUMENT_KEYS and
 # agent/agent/inventory.py RECORD_KEYS); neither a metric field nor an inventory field may take one.
-METRICS_DOCUMENT_KEYS = frozenset({"at", "running_version", "updating", "hostname", "ipv4"})
+METRICS_DOCUMENT_KEYS = frozenset({"@timestamp", "at", "running_version", "updating", "hostname", "ipv4"})
 INVENTORY_RECORD_KEYS = frozenset({"at", "hostname", "ipv4"})
-FEED_SOURCES = ("process_status", "updating", "running_version", "busy")
+FEED_SOURCES = ("process_status", "updating", "running_version", "busy", "desired", "observed")
 
 # Never renamed: this script, the configs, the patch's own files. Folders never walked.
 SKIP_FILES = frozenset({"prepare.py", CONFIG_NAME, "config.example.yaml", STAMP, "PATCH", "apply.sh"})
@@ -154,7 +154,7 @@ class SettingType(StrEnum):
 
 class InventoryFieldSpec(Lenient):
     field: str                          # its name in the host index record
-    source: str | None = None           # a feed value: process_status, updating, running_version, busy
+    source: str | None = None           # a feed value: process_status, updating, running_version, busy, desired, observed
     env: str | None = None              # or an agent .env key; a new one is added to config.py
     type: SettingType = SettingType.STR # for a new env key
     description: str | None = None
@@ -186,9 +186,8 @@ class InventoryFieldSpec(Lenient):
 
 
 DEFAULT_INVENTORY = [
-    {"field": "process_status", "source": "process_status", "description": "None while not attached"},
-    {"field": "updating", "source": "updating"},
-    {"field": "running_version", "source": "running_version", "description": "None unless RUNNING"},
+    {"field": "desired", "source": "desired", "description": "desired_*: the last desired state from the cluster manager"},
+    {"field": "observed", "source": "observed", "description": "observed_*: the agent's state as its heartbeat reports it"},
 ]
 
 

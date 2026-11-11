@@ -1,4 +1,5 @@
-"""Version requests for the client: dispatch (version_dispatch) and rollback."""
+"""Version requests for the client: dispatch (version_dispatch, also served as signature_dispatch)
+and rollback."""
 
 from typing import Annotated
 
@@ -17,6 +18,7 @@ Session = Annotated[AsyncSession, Depends(get_session)]
 
 
 @router.post("/dispatch", response_model=DispatchResponse)
+@router.post("/signature_dispatch", response_model=DispatchResponse)   # an alias: the same request
 async def version_dispatch(session: Session, request: Request, body: DispatchRequest) -> DispatchResponse:
     try:
         return await versions.dispatch(session, request.app.state.file_server,

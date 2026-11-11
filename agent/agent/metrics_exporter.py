@@ -10,18 +10,18 @@ from agent.worker_client import WorkerClient, WorkerMetrics
 
 log = logging.getLogger("agent.metrics_exporter")
 
-# Keys every metrics document carries besides the metric fields: these three from here, and
+# Keys every metrics document carries besides the metric fields: these four from here, and
 # hostname and ipv4 from ElasticClient. No WorkerMetrics field may use one of them; prepare.py
 # refuses them, and so does the constructor.
-DOCUMENT_KEYS = frozenset({"at", "running_version", "updating", "hostname", "ipv4"})
+DOCUMENT_KEYS = frozenset({"@timestamp", "at", "running_version", "updating", "hostname", "ipv4"})
 
 
 class MetricsExporter:
     """Every interval, while the worker is RUNNING, reads the worker's metrics and sends one
     document to Elastic's metrics index: each WorkerMetrics field under its field name, plus
-    `at`, `running_version` and `updating`. A metric has two names: the worker's (its
-    validation_alias, used only to read the worker's JSON) and the field name, which is its name
-    in Elastic. Counters are sent as the worker reports them, cumulative; a dashboard derives
+    `@timestamp` and `at` (the same UTC time), `running_version` and `updating`. A metric has
+    two names: the worker's (its validation_alias, used only to read the worker's JSON) and the
+    field name, which is its name in Elastic. Counters are sent as the worker reports them, cumulative; a dashboard derives
     rates. It judges nothing: the performance monitor takes its own readings."""
 
     def __init__(self, worker: WorkerClient, elastic: ElasticClient, feed: ConditionFeed, *,
@@ -51,8 +51,10 @@ class MetricsExporter:
         reading = await self._worker.metrics()
         if reading is None:
             return                                  # the performance monitor reports metrics_available
+        now = datetime.now(UTC).isoformat()
         document: dict[str, object] = {
-            "at": datetime.now(UTC).isoformat(),
+            "@timestamp": now,                      # Elastic's time field, for data views and dashboards
+            "at": now,
             "running_version": cond.running_version,
             "updating": cond.updating,
         }
