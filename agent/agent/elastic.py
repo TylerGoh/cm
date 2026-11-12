@@ -24,16 +24,7 @@ HINTS = {
 
 
 class ElasticClient:
-    """Best effort: never raises (cancellation still propagates). Two indexes; callers pick one
-    by method and never see index names. Every document gets the host's identity (hostname, ip,
-    cluster_name) added here, so callers never handle it. Host-index documents that must stay
-    current are written under a fixed id, <ip>_<key>, so a write replaces the last one, and
-    delete_other_host_docs removes this host's documents that aren't current any more. Uses the official async client on httpx, with an API key and the CA
-    in elastic.cert. One attempt per document, no retries: a failed document is dropped.
-
-    Each index logs its failure when it starts and again whenever the failure changes, saying
-    what went wrong (Elastic's error type and reason, a TLS problem, a refused connection, a
-    timeout), and logs the recovery."""
+    """Never raises errors; it logs problems instead. A failed write isn't retried."""
 
     def __init__(self, base_url: str, host: HostInfo, *, cert_path: Path, api_key: str,
                  metrics_index: str, host_index: str, timeout: float,

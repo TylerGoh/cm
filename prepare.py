@@ -35,7 +35,7 @@ from urllib.parse import unquote
 
 try:
     import yaml
-    from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+    from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 except ImportError as missing:
     sys.exit(f"prepare: {missing.name} is missing; install it with: pip install pyyaml pydantic")
 
@@ -51,11 +51,11 @@ SNAKE_CASE = re.compile(r"^[a-z][a-z0-9_]*$")
 CONSTANT_CASE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 ENV_KEY = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
-# Keys every Elastic document already carries (agent/agent/metrics_exporter.py DOCUMENT_KEYS and
-# agent/agent/inventory.py RECORD_KEYS); neither a metric field nor an inventory field may take one.
+# Keys every Elastic document already carries (agent/agent/metrics_exporter.py DOCUMENT_KEYS, and
+# what agent/agent/inventory.py puts in each inventory record); neither a metric field nor an
+# inventory field may take one.
 METRICS_DOCUMENT_KEYS = frozenset({"@timestamp", "at", "running_version", "updating", "hostname", "ip", "cluster_name"})
 INVENTORY_RECORD_KEYS = frozenset({"at", "kind", "intf", "hostname", "ip", "cluster_name"})
-FEED_SOURCES = ("process_status", "updating", "running_version", "busy", "desired", "observed")
 
 # Never renamed: this script, the configs, the patch's own files. Folders never walked.
 SKIP_FILES = frozenset({"prepare.py", CONFIG_NAME, "config.example.yaml", STAMP, "PATCH", "apply.sh"})
@@ -154,10 +154,9 @@ class SettingType(StrEnum):
 
 class InventoryFieldSpec(Lenient):
     field: str                          # its name in the host index record
-    source: str | None = None           # a feed value: process_status, updating, running_version, busy, desired, observed
-    env: str | None = None              # or an agent .env key; a new one is added to config.py
+    env: str                            # an agent .env key; a new one is added to config.py
     type: SettingType = SettingType.STR # for a new env key
-    description: str | None = None
+    description: str | None = None      # for config.yaml's reader only; not written anywhere
 
     @field_validator("field")
     @classmethod
@@ -171,28 +170,14 @@ class InventoryFieldSpec(Lenient):
 
     @field_validator("env")
     @classmethod
-    def _env(cls, value: str | None) -> str | None:
-        if value is not None and not ENV_KEY.match(value):
+    def _env(cls, value: str) -> str:
+        if not ENV_KEY.match(value):
             raise ValueError(f"{value!r} must be an UPPER_CASE .env key")
         return value
 
-    @model_validator(mode="after")
-    def _one_source(self) -> "InventoryFieldSpec":
-        if (self.source is None) == (self.env is None):
-            raise ValueError(f"{self.field}: give exactly one of source: or env:")
-        if self.source is not None and self.source not in FEED_SOURCES:
-            raise ValueError(f"{self.field}: source {self.source!r} is not one of {', '.join(FEED_SOURCES)}")
-        return self
-
-
-DEFAULT_INVENTORY = [
-    {"field": "desired", "source": "desired", "description": "desired_*: the last desired state from the cluster manager"},
-    {"field": "observed", "source": "observed", "description": "observed_*: the agent's state as its heartbeat reports it"},
-]
-
 
 class InventorySpec(Lenient):
-    fields: list[InventoryFieldSpec]
+    fields: list[InventoryFieldSpec] = []
 
 
 # env: section -> the example each .env is made from, relative to the install's top folder.
@@ -208,7 +193,7 @@ ENV_FILES = {
 class Config(Lenient):
     rename: dict[str, str] = {}
     worker: WorkerSpec
-    inventory: InventorySpec = InventorySpec.model_validate({"fields": DEFAULT_INVENTORY})
+    inventory: InventorySpec = InventorySpec()
     env: dict[str, dict[str, Any]] = {}
 
 
@@ -233,6 +218,20 @@ def unknown_keys(model: type[BaseModel], data: Any, where: str) -> list[str]:
     return found
 
 
+def skip_source_fields(raw: Any, name: str) -> None:
+    """Drops inventory fields with a source: (desired, observed, busy, ...), which older configs
+    have: the agent now always sends the desired and observed states, and those cover them all."""
+    inventory = raw.get("inventory") if isinstance(raw, dict) else None
+    fields = inventory.get("fields") if isinstance(inventory, dict) else None
+    if not isinstance(fields, list):
+        return
+    for f in fields:
+        if isinstance(f, dict) and "source" in f:
+            warn(f"{name}: inventory field {f.get('field')} (source: {f['source']}) is no longer needed; "
+                 f"desired_* and observed_* are always sent; skipped")
+    inventory["fields"] = [f for f in fields if not (isinstance(f, dict) and "source" in f)]
+
+
 def load_config(path: Path) -> tuple[Config, dict[str, str], str]:
     """The config, the renames to apply (placeholder -> name), and the file's sha256."""
     if not path.exists():
@@ -240,6 +239,7 @@ def load_config(path: Path) -> tuple[Config, dict[str, str], str]:
     raw_bytes = path.read_bytes()
     try:
         raw = yaml.safe_load(raw_bytes)
+        skip_source_fields(raw, path.name)
         config = Config.model_validate(raw)
     except (yaml.YAMLError, ValidationError) as error:
         raise SystemExit(f"prepare: {path.name} is not valid:\n{error}") from None
@@ -340,9 +340,11 @@ def rename_tree(root: Path, rename: Renamer) -> tuple[int, int]:
 
 # --- the agent's settings, read from its config.py ---
 
-BLOCK = re.compile(r"^(?P<indent>[ \t]*)# --- BEGIN generated: (?P<name>[a-z ]+?)(?: \(.*\))? ---[ \t]*\n"
+# "# BEGIN generated: <name>" to "# END generated: <name>". Files from v4 and earlier mark them
+# "# --- BEGIN generated: <name> (...) ---"; both are read, so a patch still matches them.
+BLOCK = re.compile(r"^(?P<indent>[ \t]*)# (?:--- )?BEGIN generated: (?P<name>[a-z ]+?)(?: \(.*\))?(?: ---)?[ \t]*\n"
                    r"(?P<body>.*?)"
-                   r"^[ \t]*# --- END generated: (?P=name) ---[ \t]*$", re.S | re.M)
+                   r"^[ \t]*# (?:--- )?END generated: (?P=name)(?: ---)?[ \t]*$", re.S | re.M)
 
 
 def without_blocks(text: str) -> str:
@@ -482,7 +484,7 @@ def new_settings(inventory: InventorySpec, settings: set[str], rename: Renamer) 
     seen: set[str] = set()
     out = []
     for f in inventory.fields:
-        if f.env is not None and rename(f.env.lower()) not in settings and f.env not in seen:
+        if rename(f.env.lower()) not in settings and f.env not in seen:
             seen.add(f.env)
             out.append(f)
     return out
@@ -494,23 +496,17 @@ def check_inventory(inventory: InventorySpec, settings: set[str], rename: Rename
     if repeated:
         raise SystemExit(f"prepare: inventory field repeated: {', '.join(repeated)}")
     for f in inventory.fields:
-        if f.env is not None and rename(f.env.lower()) in settings and f.type is not SettingType.STR:
+        if rename(f.env.lower()) in settings and f.type is not SettingType.STR:
             warn(f"inventory {f.field}: {f.env} is an existing agent setting; its type there is kept")
 
 
 def inventory_block(inventory: InventorySpec, settings: set[str], rename: Renamer) -> str:
     b = Block(rename)
-    b.lines.append("INVENTORY_FIELDS: tuple[FeedField | SettingField, ...] = (")
+    b.lines.append("INVENTORY_FIELDS: dict[str, object] = {")
     for f in inventory.fields:
-        if f.source is not None:
-            line = f"    FeedField({b.value(quoted(f.field))}, {b.value(quoted(f.source))}),"
-        else:
-            setting = rename(f.env.lower()) if rename(f.env.lower()) in settings else f.env.lower()
-            line = f"    SettingField({b.value(quoted(f.field))}, {b.value(quoted(setting))}),"
-        if f.description:
-            line += f"    # {b.value(f.description)}"
-        b.lines.append(line)
-    b.lines += [")", ""]
+        setting = rename(f.env.lower()) if rename(f.env.lower()) in settings else f.env.lower()
+        b.lines.append(f"    {b.value(quoted(f.field))}: config.{b.value(setting)},")
+    b.lines += ["}", ""]
     return b.text()
 
 
@@ -787,7 +783,7 @@ def main(argv: list[str]) -> int:
         for path in sorted(tree.rglob("*")):
             if path.is_file() and path.name not in SKIP_FILES and not (set(path.parts) & SKIP_DIRS):
                 text = read_text(path)
-                if text and "--- BEGIN generated: " in text:
+                if text and "BEGIN generated: " in text:
                     for name in write_blocks(path, config, commands, settings, rename):
                         print(f"wrote {name} in {path.relative_to(root.parent)}")
 

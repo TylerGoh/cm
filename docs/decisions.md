@@ -243,6 +243,13 @@ Each command is a typed function whose docstring is its help, enum options list 
 Why: cleaner command definitions than argparse plus a hand-written table helper, and a readable `--help` without extra work.
 Cost: two more dependencies (typer, rich) in the cluster manager.
 
+**Inventory fields are agent settings only; the states are always sent (2026-11-12).**
+`config.yaml`'s inventory fields are `.env` settings, generated as a plain dict that reads `config` directly (`"rack": config.rack`), and go into each interface record. The desired and observed states are fixed code in the state document, no longer configured. `prepare.py` does all the checking; the agent trusts what it generated.
+Why: the configurable mix of feed values and settings (`FeedField`, `SettingField`, the agent's own checks) was abstraction nobody used; the owner only adds settings.
+Cost: `inventory.py` imports `config`, so it has no unit tests; code that needs `config` is covered by devenv instead.
+
+**Generated blocks are marked `# BEGIN generated: <name>` / `# END generated: <name>`, with no comments inside (2026-11-12).** `prepare.py` and the patch check also read the older `# --- ... ---` form that v4 installs have.
+
 ## File server
 
 Single-file FastAPI app, one directory per job. The fetch is idempotent, hashes while streaming, rejects anything that isn't a valid zip, and writes `job.json` last. One hypertree URL per job (GET/PUT, 409 once present). No auth, one process.
@@ -279,7 +286,7 @@ Only `hypertree`, `etc_dir` and `program_log` could be renamed: the owner filled
 Why: renaming any term typed on the command line was too loose; the checklist records exactly which names are placeholders.
 
 **One `config.yaml`, applied by `prepare.py`, drives the initial install and every patch (2026-11-06).**
-The owner keeps one private `config.yaml`: the renames (now also `reload_phase`), the worker contract, the inventory fields (feed values or agent settings, new settings included) and each service's `.env` values. Every zip carries `prepare.py`, which validates it, renames, writes the generated blocks and writes the `.env` files. Commands are format strings over the agent's settings (`reload_app_phase2{config.etc_dir}`). Unknown keys are skipped with a warning. Releases are tags `v0`, `v1`, ...: `cluster_manager-initial.zip` is a full version, and each later version is a patch zip with per-service `old/`/`new/` copies and an `apply.sh` that refuses a box whose files aren't at the previous version (outside the generated blocks) unless `--force`. Version numbering was reset to `v0` at this change.
+The owner keeps one private `config.yaml`: the renames (now also `reload_phase`), the worker contract, the inventory fields (agent settings, new settings included) and each service's `.env` values. Every zip carries `prepare.py`, which validates it, renames, writes the generated blocks and writes the `.env` files. Commands are format strings over the agent's settings (`reload_app_phase2{config.etc_dir}`). Unknown keys are skipped with a warning. Releases are tags `v0`, `v1`, ...: `cluster_manager-initial.zip` is a full version, and each later version is a patch zip with per-service `old/`/`new/` copies and an `apply.sh` that refuses a box whose files aren't at the previous version (outside the generated blocks) unless `--force`. Version numbering was reset to `v0` at this change.
 Why: the proprietary parts (names, worker contract, what is sent to Elastic, settings) can't be in the repository and were being pasted or renamed by hand on each box; patches that replaced whole files broke on them. One file the owner keeps, applied the same way to a fresh install and to every patch, keeps every box consistent and survives between sessions.
 
 **`check_wire.sh` compares the two `wire.py` copies (2026-11-05).**

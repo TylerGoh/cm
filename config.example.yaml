@@ -68,25 +68,17 @@ worker:
           type: counter
           description: failed because lagged
 
-# --- inventory: the agent's record to Elastic's host index, every INVENTORY_INTERVAL ---
-# One record per interface in the agent's INTF, each with at, kind, intf, hostname, ip and
-# cluster_name; these fields are added. desired and observed go instead in the host's one state
-# document. Old documents of the host are deleted on every push. Each field has either
-#   source:  a value from the agent: process_status, updating, running_version, busy, or a whole
-#            state, sent flat with field as the prefix: desired (the last desired state:
-#            desired_version, desired_running, ...) or observed (the last heartbeat report:
-#            observed_healthy, observed_process_status, observed_updating, observed_busy, ...;
-#            the operations are left out). observed covers the single values above.
-#   env:     an agent .env key. An existing one (ETC_DIR, HOSTNAME, ...) is sent as it is; a new
-#            one is added to agent/config.py and agent/.env.example, so every agent .env must
-#            have it. type: str (default), int, float or bool.
-# Leave the whole section out for the two fields below.
+# --- inventory: the agent's records in Elastic's host index, every INVENTORY_INTERVAL ---
+# Each host sends one record per interface in its INTF, and one state document with its desired
+# and observed states (desired_*, observed_*), always. Each field here is an agent .env key whose
+# value goes into every interface record, under field. An existing key (ETC_DIR, HOSTNAME, ...) is
+# sent as it is; a new one is added to agent/config.py and agent/.env.example, so every agent .env
+# must have it. type: str (default), int, float or bool. at, kind, intf, hostname, ip and
+# cluster_name are taken.
 inventory:
-  fields:
-    - {field: desired, source: desired, description: "desired_*: the last desired state from the cluster manager"}
-    - {field: observed, source: observed, description: "observed_*: the agent's state as its heartbeat reports it"}
+  fields: []
 #   - {field: location, env: LOCATION}
-#   - {field: rack, env: RACK, type: int, description: rack number}
+#   - {field: rack, env: RACK, type: int}
 
 # --- env: values for each service's .env ---
 # prepare.py writes agent/.env, cluster-manager/.env, file-server/.env and

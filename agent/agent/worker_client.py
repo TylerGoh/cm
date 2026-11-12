@@ -20,7 +20,7 @@ class MetricType(StrEnum):
     GAUGE = auto()      # snapshot: the value is the current reading
 
 
-# --- BEGIN generated: worker contract (prepare.py, from config.yaml's worker: section) ---
+# BEGIN generated: worker contract
 
 # Commands on the worker, each appended as-is to the base URL (WORKER_URL). Every query and
 # command is a GET with no body. Each is a format string: {config.<setting>} becomes that agent
@@ -44,7 +44,7 @@ class WorkerMetrics(BaseModel):
     requests_out_total:        Annotated[float, MetricType.COUNTER, COUNTERS_ENDPOINT, Field(validation_alias="requests.out.total")]    # sent out
     requests_old_failed_total: Annotated[float, MetricType.COUNTER, COUNTERS_ENDPOINT, Field(validation_alias="requests.old_failed.total")]    # failed because too old
     requests_out_lagged_total: Annotated[float, MetricType.COUNTER, COUNTERS_ENDPOINT, Field(validation_alias="requests.out_lagged.total")]    # failed because lagged
-# --- END generated: worker contract ---
+# END generated: worker contract
 
 
 def _derive() -> tuple[dict[str, set[str]], frozenset[str], frozenset[str]]:

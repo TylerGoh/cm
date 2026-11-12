@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                                      window_seconds=config.performance_window_seconds,
                                      max_failed_ratio=config.max_failed_ratio,
                                      max_failures=config.max_metrics_failures)
-    inventory = InventoryExporter(elastic, feed, settings=config, intfs=config.intf,
+    inventory = InventoryExporter(elastic, feed, intfs=config.intf,
                                   interval=config.inventory_interval,
                                   require_running=config.require_running)
     metrics_exporter = MetricsExporter(worker, elastic, feed, interval=config.metrics_export_interval)

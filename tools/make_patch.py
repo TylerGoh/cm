@@ -146,7 +146,7 @@ if [[ -f "$TARGET/.patches/applied" ]] && grep -q "^$TO " "$TARGET/.patches/appl
   echo "$TO is already applied"; exit 0
 fi
 
-strip() { sed '/--- BEGIN generated:/,/--- END generated:/d' "$1"; }
+strip() { sed '/BEGIN generated:/,/END generated:/d' "$1"; }
 list() { [[ -d "$HERE/$1" ]] && (cd "$HERE/$1" && find . -type f | sed 's|^\./||' | sort) || true; }
 mapfile -t OLD < <(list old)
 mapfile -t NEW < <(list new)

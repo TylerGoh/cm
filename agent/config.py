@@ -91,8 +91,8 @@ class AgentConfig(BaseSettings):
     elastic_host_index: str
     elastic_timeout: float
 
-    # --- BEGIN generated: inventory settings (prepare.py, from config.yaml's inventory env: fields) ---
-    # --- END generated: inventory settings ---
+    # BEGIN generated: inventory settings
+    # END generated: inventory settings
 
 
 if not ENV_FILE.exists():
