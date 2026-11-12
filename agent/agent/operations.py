@@ -40,27 +40,6 @@ class Plan:
     context: Mapping[str, object]       # Mapping, not dict: dict is invariant, so dict[str, str] wouldn't fit
 
 
-# Op             Steps                                                     Finally   Context
-# REATTACH       reattach, wait_for_version (when), stop (when)            –         {}
-# UPDATE         download, clear_hypertree (non-critical),                 –         artifact, hypertree_get_url,
-#                fetch_hypertree (non-critical), reload, verify (retries=1),         hypertree_upload_url
-#                upload_hypertree (non-critical)
-# FORCE_UPDATE   download, clear_hypertree (non-critical),                 –         artifact, hypertree_get_url
-#                fetch_hypertree (non-critical)
-# START          start, wait_for_log                                       –         {}
-# CRASH_RESTART  stop, start, wait_for_log                                 –         {}
-# RESTART        stop, start, wait_for_log                                 –         {}
-# STOP           stop                                                      –         {}
-#
-# artifact = artifact_url, artifact_sha256 and version. start produces log_offset for wait_for_log.
-# start, wait_for_log and wait_for_version have retries=0: a spawn must not be repeated, and the
-# waits kill the process on timeout, so a retry can't succeed. A failed start ends as a crash
-# (dead pid in STARTING), so no recipe has a finally step. The hypertree steps only speed loading
-# up, so they are non-critical: their failures stay in the step log and never fail the update.
-# FORCE_UPDATE fetches the hypertree for the CRASH_RESTART (or, from STOPPED, the START) that loads
-# the new bundle next; nothing
-# uploads one after a CRASH_RESTART, since a hypertree is never worth risking a recovery for.
-
 def plan(op: OpType, desired: DesiredState, process: ProcessManager, updates: UpdateManager) -> Plan:
     s = _Stages(process, updates)
     match op:
