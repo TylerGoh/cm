@@ -6,7 +6,6 @@ Unresolved questions and undesigned parts. When one is settled, move the outcome
 
 - Whether START counts as updating (`UPDATING_OPS` is UPDATE and FORCE_UPDATE today).
 - With no routes, FastAPI and uvicorn only host the lifespan. Decide whether to keep them (signal handling, graceful shutdown, room for routes later) or run the lifespan under plain `asyncio.run`. Related: uvicorn runs the lifespan, and so the first tick, before it binds the port, so a second agent started by hand acts once (a heartbeat, possibly a REATTACH) before it fails to bind. systemd prevents that in practice; a lock file in the lifespan would prevent it everywhere. Running `agent` in a terminal while the service runs is now an easy way to hit this.
-- What the `agent_started` document contains beyond `event`, `at`, `agent_version` and the host fields: deployment settings, whether it was a first boot.
 - The synchronous file reads and fsyncs in `JsonStore` and `ProcessManager.derive_status` block the event loop and so delay HTTP requests. Move them to a thread if that ever matters.
 - If the worker ever runs as a systemd unit, consider a systemd watchdog (`WatchdogSec=`, `Restart=no`) for hang detection, with `ProcessManager` mapping the unit's `failed` state to CRASHED and the health monitor going back to reporting only.
 

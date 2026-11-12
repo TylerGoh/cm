@@ -1,11 +1,9 @@
 import asyncio
-import importlib.metadata
 import logging
 import os
 import signal
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -27,8 +25,6 @@ from agent.wire import ProcessStatus
 from agent.worker_client import WorkerClient
 
 log = logging.getLogger("agent")
-
-DISTRIBUTION = "agent"                  # the name in pyproject.toml, for agent_version
 
 
 async def heartbeat_loop(supervisor: Supervisor, interval: float) -> None:
@@ -71,22 +67,6 @@ def _ensure_first_boot(memory_store: JsonStore[AgentMemory],
         process_store.load()
     except FileNotFoundError:
         process_store.save(ProcessMemory(pid=None, create_time=None, state=ProcessStatus.STOPPED))
-
-
-def _agent_version() -> str:
-    try:
-        return importlib.metadata.version(DISTRIBUTION)
-    except importlib.metadata.PackageNotFoundError:
-        return "unknown"                            # running from a source tree that isn't installed
-
-
-async def _record_start(elastic: ElasticClient) -> None:
-    """One document per agent start, to the host index. Best effort, like every Elastic write."""
-    await elastic.index_host({
-        "event": "agent_started",
-        "at": datetime.now(UTC).isoformat(),
-        "agent_version": _agent_version(),
-    })
 
 
 @asynccontextmanager
@@ -132,8 +112,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     metrics_exporter = MetricsExporter(worker, elastic, feed, interval=config.metrics_export_interval)
     supervisor = Supervisor(host.ipv4, process, updates, worker, health, performance, feed,
                             cluster_manager, memory_store)
-
-    await _record_start(elastic)                    # before any loop starts
 
     ticking = asyncio.create_task(heartbeat_loop(supervisor, config.heartbeat_interval), name="heartbeat")
     ticking.add_done_callback(_exit_if_failed)

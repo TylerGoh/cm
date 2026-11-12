@@ -51,10 +51,6 @@ class ElasticClient:
         self._host_index = host_index
         self._failure: dict[str, str] = {}           # what failed -> the failure last logged for it
 
-    async def index_host(self, doc: dict[str, object]) -> None:
-        """An event (agent_started): a new document every time, never deleted by the agent."""
-        await self._index(self._host_index, doc)
-
     def host_doc_id(self, key: str) -> str:
         return f"{self._host.ipv4}_{key}"
 

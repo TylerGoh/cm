@@ -399,7 +399,7 @@ Nothing is sent to Elastic from the monitor; the metrics exporter sends the read
 
 Code: `agent/elastic.py` (`ElasticClient`). `ElasticClient(base_url, host, *, cert_path, api_key, metrics_index, host_index, timeout)`.
 
-- Two indexes. `index_metrics(doc)` writes to the metrics index (the metrics exporter's documents). The host index takes events and current documents: `index_host(doc)` adds an event (the `agent_started` record, with an `event` field), a new document every time; `put_host(key, doc)` writes the host's current document under the fixed id `<ip>_<key>`, replacing the last one; `delete_other_host_docs(keep)` deletes this host's documents (matched on `ip`, or `ipv4` for documents written before the rename) except the kept keys and events, with `delete_by_query`. Callers never see index names or ids beyond the key. The API key needs `index` and `delete` on the host index.
+- Two indexes. `index_metrics(doc)` writes to the metrics index (the metrics exporter's documents). The host index holds each host's current documents: `put_host(key, doc)` writes the host's current document under the fixed id `<ip>_<key>`, replacing the last one; `delete_other_host_docs(keep)` deletes this host's documents (matched on `ip`, or `ipv4` for documents written before the rename) except the kept keys and any with an `event` field (the `agent_started` records older agents wrote; they're deleted by hand), with `delete_by_query`. Callers never see index names or ids beyond the key. The API key needs `index` and `delete` on the host index.
 - Every document gets the host's identity added here: `hostname`, `ip` (the agent's IPv4 address) and `cluster_name` from `HostInfo`. Callers never add them.
 - It wraps the official client, `AsyncElasticsearch(base_url, ca_certs=cert_path, api_key=api_key, request_timeout=timeout, max_retries=0, retry_on_timeout=False, node_class="httpxasync")`: async, so a slow Elastic never blocks the event loop, and on httpx, so there's no aiohttp. One attempt per document. The client's major version (`elasticsearch>=8.13,<9`) must match the cluster's. `client=` replaces it in tests.
 - TLS is verified against the CA certificate in `elastic.cert`. A missing certificate fails agent startup (`FileNotFoundError`), since it's a configuration error rather than an Elastic outage.
@@ -452,8 +452,7 @@ Logging setup stays out of `app.py`: importing `agent.app` (for example to test 
 The lifespan, startup half (before `yield`):
 1. Build the stores and run `_ensure_first_boot`.
 2. Build `HostInfo` from `config`, then `ConditionFeed`, `WorkerClient`, `ElasticClient`, `ClusterManagerClient`, `ProcessManager`, `UpdateManager`, `HealthMonitor`, `PerformanceMonitor`, `InventoryExporter`, `MetricsExporter` and the `Supervisor`. Each object gets only what it uses.
-3. `_record_start`: one `agent_started` document (`event`, `at`, `agent_version`, plus the host fields) to the host index before any loop starts. `agent_version` is the installed version of the `agent` distribution (`DISTRIBUTION` in `app.py`), or `"unknown"` when running from a source tree that isn't installed. Best effort; a down Elastic doesn't block startup, and the document is then lost.
-4. Start explicit tasks (not a TaskGroup): `heartbeat_loop`, `health.run()`, `performance.run()`, `inventory.run()`, `metrics_exporter.run()`.
+3. Start explicit tasks (not a TaskGroup): `heartbeat_loop`, `health.run()`, `performance.run()`, `inventory.run()`, `metrics_exporter.run()`.
    - The tick task has `_exit_if_failed`: if it ends with an exception, it logs and sends the process SIGTERM, so uvicorn shuts down and systemd restarts the agent.
    - The other tasks have `_log_if_failed`: a crash is logged and the supervisor keeps running.
 

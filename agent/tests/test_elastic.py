@@ -63,9 +63,9 @@ def test_documents_get_the_host_and_go_to_their_index(tmp_path: Path) -> None:
     es = FakeEs()
     c = client(tmp_path, es)
     asyncio.run(c.index_metrics({"a": 1}))
-    asyncio.run(c.index_host({"b": 2}))
+    asyncio.run(c.put_host("state", {"b": 2}))
     host = {"hostname": "box1", "ip": "10.0.0.1", "cluster_name": "sg-prod"}
-    assert es.sent == [("m", {"a": 1, **host}), ("h", {"b": 2, **host})]
+    assert es.sent == [("m", {"a": 1, **host}), ("h", "10.0.0.1_state", {"b": 2, **host})]
 
 
 def test_host_documents_have_a_fixed_id_per_ip(tmp_path: Path) -> None:
@@ -144,6 +144,6 @@ def test_each_index_logs_its_own_failure(tmp_path: Path, caplog: pytest.LogCaptu
     c = client(tmp_path, FakeEs(bad))
     with caplog.at_level("INFO", logger="agent.elastic"):
         asyncio.run(c.index_metrics({"a": 1}))                  # fails
-        asyncio.run(c.index_host({"b": 1}))                     # works: no recovery line for h
+        asyncio.run(c.put_host("state", {"b": 1}))              # works: no recovery line for h
         asyncio.run(c.index_metrics({"a": 1}))                  # works: m recovered
     assert [r.levelname for r in caplog.records] == ["WARNING", "INFO"]
