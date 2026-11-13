@@ -518,7 +518,7 @@ Upstream and the file server call a version a **job**. The job id is always exac
 
 Version dispatch is the daemon's main client request, served by the `version_dispatch` endpoint (`POST /versions/dispatch`, also served at the alias `POST /versions/signature_dispatch`; `services/versions.dispatch`):
 1. The request names the new version (the job) and the upstream endpoint it is published at. A version already in `version_deployments` is refused (a version is never deployed twice), and so is a dispatch while another version is VERIFYING. The endpoint is passed to the file server as given, and it alone decides which build of the job is fetched (for example the optimized one).
-2. The daemon asks the internal file server to fetch the job (`FileServerClient.fetch`, `POST /jobs/<job_id>` with the upstream endpoint) and waits for the answer. The file server streams the artifact from upstream, stores it, and answers with its sha256, which becomes `artifact_sha256`. The fetch is idempotent: a job already stored is returned as it is. A failed fetch is a 502 from the daemon and writes nothing.
+2. The daemon asks the internal file server to fetch the job (`FileServerClient.fetch`, `POST /jobs/<job_id>` with the upstream endpoint) and waits for the answer. The file server streams the artifact from upstream, stores it, and answers with its sha256, which becomes `artifact_sha256`. The fetch is idempotent: a job already stored is returned as it is, and one whose artifact is gone is fetched again. A failed fetch is a 502 from the daemon and writes nothing.
 3. The daemon then starts the canary (see "Canary"): in one transaction it picks the canary agents, the version enters VERIFYING with the file server's URL and that sha256, and the canary agents' desired state points at it with a bumped `generation`. If no agent is eligible, dispatch returns an error and nothing enters VERIFYING. After the commit it schedules the canary judgement.
 
 Every `artifact_url` in a `DesiredState` points at the internal file server. Agents download only from there, never from the upstream endpoint and never from the cluster manager, which serves no artifacts: it only says which file-server URL to fetch and which hash to expect. The agent's `download(artifact_url, artifact_sha256, version)` takes whatever it is given.
@@ -535,22 +535,22 @@ Storage, one directory per job under `FILE_SERVER_ROOT`:
 
 ```
 <root>/<job_id>/artifact    the artifact (a zip, checked before it is stored), exactly as fetched
-<root>/<job_id>/job.json    JobInfo; written last, so its presence means the artifact is complete
+<root>/<job_id>/job.json    JobInfo; written last, after the artifact
 <root>/<job_id>/hypertree   a zip of the worker's <hash>/ folder, uploaded by the first agent that loads the job
 ```
 
 | Method and path | Caller | Does |
 |---|---|---|
-| `POST /jobs/{job_id}` `{"upstream_url"}` | daemon | Streams the artifact from upstream, hashing as it writes, checks it is a valid zip, and answers `JobInfo(job_id, sha256, size, upstream_url, fetched_at)`. Idempotent: a stored job is returned as it is. An upstream error or an artifact that isn't a valid zip is a 502 and leaves nothing stored. |
+| `POST /jobs/{job_id}` `{"upstream_url", "expected_sha256"?}` | daemon | Streams the artifact from upstream, hashing as it writes, checks it is a valid zip, and answers `JobInfo(job_id, sha256, size, upstream_url, fetched_at)`. Idempotent: a stored job is returned as it is; one whose artifact is missing or not `job.json`'s size is fetched again. An upstream error or an artifact that isn't a valid zip is a 502 and leaves nothing stored. With `expected_sha256`, an artifact with another hash (stored or just fetched) is a 409 and a fetched one isn't stored; the client raises `ArtifactMismatch`. |
 | `GET /jobs/{job_id}` | anyone | The stored `JobInfo`, or 404. |
-| `GET /jobs/{job_id}/artifact` | agents | The artifact, or 404 until `job.json` exists. |
+| `GET /jobs/{job_id}/artifact` | agents | The artifact, or 404 unless the job is stored (`job.json` there, and the artifact with its size). |
 | `GET /jobs/{job_id}/hypertree` | agents | The hypertree, or 404 when there is none yet. |
 | `PUT /jobs/{job_id}/hypertree` (raw body) | agents | Stores it (201). 409 when the job already has one, 404 for an unknown job. |
 
 Rules:
 - A job id must match `^[A-Za-z0-9._-]{1,128}$` (and isn't `.` or `..`), or the request is refused with 422, since it becomes a directory name. The agent's `download` applies the same rule to the bundle folder name.
 - Artifacts are zips, since agents unzip them into bundles. Before an artifact is stored, the server checks that it opens as a zip and that every member passes its CRC check (`zipfile.is_zipfile` and `ZipFile.testzip()`), so a truncated or non-zip download from upstream never becomes a job. Hypertrees aren't checked.
-- Every file is written to a `.tmp` name, fsynced, then renamed into place, and `job.json` is written last. A crash part-way leaves no job that anyone is served, and the next fetch starts it again.
+- Every file is written to a `.tmp` name, fsynced, then renamed into place, and `job.json` is written last. A crash part-way leaves no job that anyone is served, and the next fetch starts it again. A job counts as stored only while `job.json` and an artifact of its size are both there, so one deleted by hand, whole or only its artifact, is fetched again by the next `POST`.
 - A fetch and a hypertree upload hold the job's lock, so two concurrent fetches of one job fetch once, and only one upload wins.
 - Nothing is ever deleted: the owner keeps every job, since storage is cheap.
 - Settings come only from `.env` in the `file-server` project folder (`FileServerConfig`), with the same rules as the other services: the process environment is ignored, no defaults, no unknown keys. `FILE_SERVER_ROOT`, `FILE_SERVER_UPSTREAM_TIMEOUT` (seconds) and `FILE_SERVER_PORT`.

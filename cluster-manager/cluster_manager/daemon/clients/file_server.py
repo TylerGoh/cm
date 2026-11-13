@@ -21,6 +21,10 @@ class FileServerError(Exception):
     """The file server answered with an error status."""
 
 
+class ArtifactMismatch(FileServerError):
+    """The artifact upstream serves has another sha256 than the one expected; nothing was stored."""
+
+
 class FileServerClient:
     def __init__(
         self,
@@ -42,14 +46,18 @@ class FileServerClient:
         """Where agents fetch (GET) and upload (PUT) the job's hypertree."""
         return f"{self._base_url}/jobs/{job_id}/hypertree"
 
-    async def fetch(self, upstream_url: str, job_id: str) -> JobInfo:
+    async def fetch(self, upstream_url: str, job_id: str, *, expected_sha256: str | None = None) -> JobInfo:
         """Has the file server store the job's artifact from `upstream_url`, and returns it with
-        its sha256. Idempotent: a job already stored comes back as it is. Raises on any failure."""
+        its sha256. Idempotent: a job already stored comes back as it is, and one whose artifact
+        is gone is fetched again. With `expected_sha256`, raises ArtifactMismatch when the
+        artifact has another hash. Raises on any failure."""
         response = await self._http.post(
             f"/jobs/{job_id}",
-            json={"upstream_url": upstream_url},
+            json={"upstream_url": upstream_url, "expected_sha256": expected_sha256},
             timeout=self._fetch_timeout,
         )
+        if response.status_code == 409:
+            raise ArtifactMismatch(response.json().get("detail", response.text[:200]))
         _raise_for_status(response)
         return JobInfo.model_validate_json(response.content)
 

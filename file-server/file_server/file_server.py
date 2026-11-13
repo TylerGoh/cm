@@ -3,9 +3,13 @@
 One directory per job (the job id is the worker's version string):
 
     <root>/<job_id>/artifact    the artifact (a zip, checked before it is stored), exactly as fetched
-    <root>/<job_id>/job.json    JobInfo; written last, so its presence means the artifact is complete
+    <root>/<job_id>/job.json    JobInfo; written last, after the artifact
     <root>/<job_id>/hypertree   a zip of the worker's <hash>/ hypertree folder, uploaded by the first
                                 agent that loads the job; stored as given, not checked
+
+A job is stored while both are there and the artifact has job.json's size. One missing (deleted
+by hand) is fetched again by the next POST, which the daemon sends regularly for every version
+agents may still be pointed at.
 
 Run: the `file-server` command. Settings come only from .env in the project folder.
 """
@@ -32,6 +36,8 @@ BIND_HOST = "0.0.0.0"                                       # every service list
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"   # as the agent's and the daemon's .env.example
 CHUNK_SIZE = 1024 * 1024
 JOB_ID = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+
+log = logging.getLogger("file_server")
 
 
 class FileServerConfig(BaseSettings):
@@ -65,6 +71,7 @@ class FetchRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     upstream_url: str
+    expected_sha256: str | None = None
 
 
 class JobInfo(BaseModel):
@@ -101,6 +108,21 @@ def _read_info(job_dir: Path) -> JobInfo | None:
     return JobInfo.model_validate_json(info_path.read_bytes())
 
 
+def _stored(job_dir: Path) -> JobInfo | None:
+    """The job's info while its artifact is there with the recorded size, otherwise None."""
+    info = _read_info(job_dir)
+    if info is None:
+        return None
+    artifact = job_dir / "artifact"
+    if not artifact.exists() or artifact.stat().st_size != info.size:
+        return None
+    return info
+
+
+def _mismatch(job_id: str, expected: str, got: str) -> HTTPException:
+    return HTTPException(status_code=409, detail=f"artifact for {job_id} has sha256 {got}, expected {expected}")
+
+
 def _zip_problem(path: Path) -> str | None:
     """None if `path` is a complete zip whose every member passes its CRC check, otherwise why
     not. Agents unzip the artifact into place, so a file that isn't one is refused here."""
@@ -128,12 +150,18 @@ def _write_atomic(path: Path, data: bytes) -> None:
 @app.post("/jobs/{job_id}")
 async def fetch_job(job_id: str, request: FetchRequest) -> JobInfo:
     """Fetches the job's artifact from upstream and stores it. Idempotent: a job that is
-    already stored is returned as it is, without fetching again."""
+    already stored is returned as it is, without fetching again. With expected_sha256, an
+    artifact with another hash is refused with 409, and a fetched one is not stored."""
     job_dir = _job_dir(job_id)
+    expected = request.expected_sha256.lower() if request.expected_sha256 is not None else None
     async with _lock(job_id):
-        existing = _read_info(job_dir)
+        existing = _stored(job_dir)
         if existing is not None:
+            if expected is not None and existing.sha256 != expected:
+                raise _mismatch(job_id, expected, existing.sha256)
             return existing
+        if _read_info(job_dir) is not None:
+            log.warning("artifact for %s is missing or incomplete; fetching it again", job_id)
 
         job_dir.mkdir(parents=True, exist_ok=True)
         tmp = job_dir / "artifact.tmp"
@@ -160,6 +188,10 @@ async def fetch_job(job_id: str, request: FetchRequest) -> JobInfo:
         except BaseException:
             tmp.unlink(missing_ok=True)
             raise
+
+        if expected is not None and digest.hexdigest() != expected:
+            tmp.unlink(missing_ok=True)
+            raise _mismatch(job_id, expected, digest.hexdigest())
 
         problem = _zip_problem(tmp)
         if problem is not None:
@@ -189,7 +221,7 @@ async def get_job(job_id: str) -> JobInfo:
 @app.get("/jobs/{job_id}/artifact")
 async def get_artifact(job_id: str) -> FileResponse:
     job_dir = _job_dir(job_id)
-    if _read_info(job_dir) is None:
+    if _stored(job_dir) is None:
         raise HTTPException(status_code=404, detail=f"no job {job_id}")
     return FileResponse(job_dir / "artifact", media_type="application/octet-stream")
 

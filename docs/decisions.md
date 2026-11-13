@@ -263,6 +263,11 @@ Single-file FastAPI app, one directory per job. The fetch is idempotent, hashes 
 Why: storage is cheap, and every stored job stays available for a rollback or a re-dispatch.
 Cost: disk grows with every job.
 
+**A job is stored only while its artifact is there; a missing one is fetched again (2026-11-13).**
+The fetch checks for `job.json` and an artifact of its size, not `job.json` alone, and fetches again from the request's upstream URL otherwise. The daemon can pass the sha256 it recorded: an artifact with another hash is refused with 409 and not stored.
+Why: a version deleted by hand on the file server stayed missing, and with only the artifact gone, a new fetch did nothing. Refusing a changed artifact keeps the file server from serving one that agents would reject, and lets a later fetch succeed once upstream serves the right one again.
+Cost: a missing hypertree isn't restored; the next agent to load the version makes and uploads a new one.
+
 ## Packaging
 
 **Three separate projects, `agent`, `cluster-manager` and `file-server` (2026-11-04).**
