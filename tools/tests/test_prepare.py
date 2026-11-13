@@ -170,7 +170,7 @@ def test_inventory_env_fields_become_settings_and_env_lines(tmp_path):
                                       {"field": "rack", "env": "RACK", "type": "int"},
                                       {"field": "tree", "env": "HYPERTREE_DIR"}]}
     agent = example_env("agent")
-    agent.update({"IPV4": "", "RACK": 7, "HYPERTREE_DIR": "/srv/tree", "WORKER_COMMAND": ["/w", "-a"],
+    agent.update({"IPV4": "", "RACK": 7, "HYPERTREE_DIR": "/srv/tree", "INTF": ["eth0", "eth1"],
                   "LOG_FORMAT": "%(asctime)s %(message)s"})
     config["env"] = {"agent": agent, "file-server": example_env("file-server")}
     result = run(root, config)
@@ -183,7 +183,7 @@ def test_inventory_env_fields_become_settings_and_env_lines(tmp_path):
     assert "inventory field state (source: process_status) is no longer needed" in result.stderr
     env = (root / "agent/.env").read_text()
     assert "\nRACK=7\n" in env and "\nROUTE_MAP_DIR=/srv/tree\n" in env and "\nWORKER_APP_LOG_PATH=x\n" in env
-    assert "\nWORKER_COMMAND='[\"/w\", \"-a\"]'\n" in env
+    assert "\nINTF='[\"eth0\", \"eth1\"]'\n" in env
     assert '\nLOG_FORMAT="%(asctime)s %(message)s"\n' in env
     assert "\nIPV4=\n" in env                                           # "" is written empty
     assert (root / "agent/.env").stat().st_mode & 0o777 == 0o600

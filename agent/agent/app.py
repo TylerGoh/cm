@@ -16,12 +16,11 @@ from agent.health import HealthMonitor
 from agent.inventory import InventoryExporter
 from agent.metrics_exporter import MetricsExporter
 from agent.performance import PerformanceMonitor
-from agent.models import AgentMemory, HostInfo, ProcessMemory
-from agent.process import ProcessManager
+from agent.models import AgentMemory, HostInfo
+from agent.process import ProcessManager, WorkerUnit
 from agent.state_store import JsonStore
 from agent.supervisor import Supervisor
 from agent.updates import UpdateManager
-from agent.wire import ProcessStatus
 from agent.worker_client import WorkerClient
 
 log = logging.getLogger("agent")
@@ -59,8 +58,6 @@ def _ensure_folders() -> None:
     created and one that can't be fails here instead of at its first use."""
     folders = [
         config.memory_store_path.parent,
-        config.process_store_path.parent,
-        config.worker_console_log_dir,
         config.worker_program_log_path.parent,
         config.download_dir,
         config.bundle_dir,
@@ -71,8 +68,7 @@ def _ensure_folders() -> None:
         folder.mkdir(parents=True, exist_ok=True)
 
 
-def _ensure_first_boot(memory_store: JsonStore[AgentMemory],
-                       process_store: JsonStore[ProcessMemory]) -> None:
+def _ensure_first_boot(memory_store: JsonStore[AgentMemory]) -> None:
     """Missing file = first boot, built explicitly. A corrupt file raises and fails startup."""
     try:
         memory_store.load()
@@ -80,19 +76,14 @@ def _ensure_first_boot(memory_store: JsonStore[AgentMemory],
         memory_store.save(AgentMemory(acknowledged_generation=0, handled_restart_generation=0,
                                       handled_force_update_generation=0, failed_generation=None,
                                       crash_restarted=False))
-    try:
-        process_store.load()
-    except FileNotFoundError:
-        process_store.save(ProcessMemory(pid=None, create_time=None, state=ProcessStatus.STOPPED))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- startup ---
     memory_store = JsonStore(AgentMemory, config.memory_store_path)
-    process_store = JsonStore(ProcessMemory, config.process_store_path)
     _ensure_folders()
-    _ensure_first_boot(memory_store, process_store)
+    _ensure_first_boot(memory_store)
 
     host = HostInfo(ipv4=config.ipv4, hostname=config.hostname, cluster_name=config.cluster_name)
     feed = ConditionFeed()
@@ -103,11 +94,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                             metrics_index=config.elastic_metrics_index,
                             host_index=config.elastic_host_index, timeout=config.elastic_timeout)
     cluster_manager = ClusterManagerClient(config.cluster_manager_url)
-    process = ProcessManager(worker, process_store, command=config.worker_command,
-                             console_log_dir=config.worker_console_log_dir,
+    process = ProcessManager(worker, WorkerUnit(config.worker_systemctl_name),
                              program_log_path=config.worker_program_log_path,
                              initialize_flag=config.worker_initialize_flag,
                              start_timeout=config.start_timeout, stop_timeout=config.stop_timeout)
+    await process.check_unit()
     updates = UpdateManager(worker, download_dir=config.download_dir, bundle_dir=config.bundle_dir,
                             etc_dir=config.etc_dir,
                             bundle_symlink_mapping=config.bundle_symlink_mapping,

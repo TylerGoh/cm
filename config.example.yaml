@@ -89,7 +89,7 @@ inventory:
 # prepare.py before it changes anything. "" is a value: the key is written empty (for per-box
 # keys like IPV4 and HOSTNAME, filled in on each box, or MATTERMOST_WEBHOOK_URL left off).
 # Write a key in its renamed form or its placeholder form (HYPERTREE_DIR or ROUTE_MAP_DIR). A key
-# the release doesn't have is skipped with a warning. Lists and objects (WORKER_COMMAND,
+# the release doesn't have is skipped with a warning. Lists and objects (INTF,
 # BUNDLE_SYMLINK_MAPPING) are written as JSON.
 # This holds passwords and keys: keep config.yaml private. The .env files are written chmod 600.
 env: {}
@@ -98,7 +98,8 @@ env: {}
 #     HOSTNAME: ""
 #     PORT: 8100
 #     LOG_LEVEL: INFO
-#     WORKER_COMMAND: ["/opt/worker/bin/worker", "--flag-a"]
+#     INTF: ["eth0", "eth1"]
+#     WORKER_SYSTEMCTL_NAME: worker.service
 #     BUNDLE_SYMLINK_MAPPING: {"vision/model.bin": "vision/model.bin"}
 #     RACK: 7
 #     HEARTBEAT_INTERVAL: 10       # new in the release after v1: add it, or prepare.py stops

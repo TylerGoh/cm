@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from ipaddress import IPv4Address
 from typing import TypedDict
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict
 
 from agent.wire import ProcessStatus
 
@@ -41,9 +41,3 @@ class AgentMemoryChanges(TypedDict, total=False):
     failed_generation: int | None
     crash_restarted: bool
 
-
-class ProcessMemory(BaseModel):                  # persisted; the derived status is ProcessStatus
-    model_config = ConfigDict(frozen=True)
-    pid: int | None
-    create_time: AwareDatetime | None            # the process's creation time from the OS, in UTC
-    state: ProcessStatus                         # never CRASHED

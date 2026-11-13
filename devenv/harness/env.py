@@ -6,7 +6,8 @@ with job_1 ACTIVE and no agents. A scenario then starts two agents; each spawns 
 Every service runs from a fresh copy of its project folder (.run/<name>/src) with its own .env,
 because each service reads .env from next to its code. Nothing in the real project folders is
 written. Every process we start is its own process group, recorded in .run/pids/<name>.pid; the
-fake workers (spawned by the agents) write .run/pids/worker-<port>.pid themselves. Every process
+fake workers (started by the agents through fake_systemctl.py, the `systemctl` on their PATH) write
+.run/pids/worker-<port>.pid themselves. Every process
 also carries DEVENV_RUN=<.run path> in its environment, so a sweep finds strays from a run that
 was killed with kill -9.
 """
@@ -36,6 +37,8 @@ REPO = DEVENV.parent
 RUN = DEVENV / ".run"
 PIDS = RUN / "pids"
 LOGS = RUN / "logs"
+UNITS = RUN / "units"
+BIN = RUN / "bin"
 MARKER = "DEVENV_RUN"
 PYTHON = sys.executable
 
@@ -79,6 +82,19 @@ FILE_SERVER_ENV = {
 }
 
 
+def worker_unit(n: int) -> str:
+    return f"worker{n}.service"
+
+
+def worker_command(n: int) -> list[str]:
+    home = RUN / f"agent{n}"
+    return [PYTHON, str(HARNESS / "fake_worker.py"), "--port", str(WORKER_PORTS[n - 1]),
+            "--log", str(home / "worker" / "worker.log"),
+            "--etc", str(home / "worker" / "etc"),
+            "--hypertree", str(home / "worker" / "hypertree"),
+            "--pids", str(PIDS)]
+
+
 def agent_env(n: int) -> dict[str, object]:
     """Agent n's settings (n = 1 or 2): fast monitors, a 30s performance window."""
     home = RUN / f"agent{n}"
@@ -88,13 +104,7 @@ def agent_env(n: int) -> dict[str, object]:
         "CLUSTER_NAME": "dev", "INTF": ["eth0", "eth1"],
         "PORT": AGENT_PORTS[n - 1], "LOG_LEVEL": "INFO", "LOG_FORMAT": LOG_FORMAT,
         "MEMORY_STORE_PATH": str(home / "state" / "memory.json"),
-        "PROCESS_STORE_PATH": str(home / "state" / "process.json"),
-        "WORKER_COMMAND": [PYTHON, str(HARNESS / "fake_worker.py"), "--port", str(worker_port),
-                           "--log", str(home / "worker" / "worker.log"),
-                           "--etc", str(home / "worker" / "etc"),
-                           "--hypertree", str(home / "worker" / "hypertree"),
-                           "--pids", str(PIDS)],
-        "WORKER_CONSOLE_LOG_DIR": str(home / "worker" / "console"),
+        "WORKER_SYSTEMCTL_NAME": worker_unit(n),
         "WORKER_PROGRAM_LOG_PATH": str(home / "worker" / "worker.log"),
         "WORKER_INITIALIZE_FLAG": "worker ready",
         "START_TIMEOUT": 60, "STOP_TIMEOUT": 10,
@@ -120,6 +130,14 @@ def agent_env(n: int) -> dict[str, object]:
         "ELASTIC_METRICS_INDEX": "dev-metrics", "ELASTIC_HOST_INDEX": "dev-hosts",
         "ELASTIC_TIMEOUT": 1,
     }
+
+
+def install_systemctl() -> None:
+    """.run/bin/systemctl: runs fake_systemctl.py with devenv's Python."""
+    BIN.mkdir(parents=True, exist_ok=True)
+    wrapper = BIN / "systemctl"
+    wrapper.write_text(f'#!/bin/sh\nexec "{PYTHON}" "{HARNESS / "fake_systemctl.py"}" "$@"\n')
+    wrapper.chmod(0o755)
 
 
 class EnvError(RuntimeError):
@@ -252,7 +270,8 @@ class Environment:
 
     # --- processes ---
 
-    def _spawn(self, name: str, argv: list[str], *, cwd: Path, pythonpath: Path | None = None) -> Service:
+    def _spawn(self, name: str, argv: list[str], *, cwd: Path, pythonpath: Path | None = None,
+               path_first: Path | None = None) -> Service:
         LOGS.mkdir(parents=True, exist_ok=True)
         PIDS.mkdir(parents=True, exist_ok=True)
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
@@ -260,6 +279,8 @@ class Environment:
         env["PYTHONUNBUFFERED"] = "1"
         if pythonpath is not None:
             env["PYTHONPATH"] = str(pythonpath)
+        if path_first is not None:
+            env["PATH"] = f"{path_first}{os.pathsep}{env.get('PATH', '')}"
         log = open(LOGS / f"{name}.log", "ab")
         proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log,
                                 stderr=subprocess.STDOUT, start_new_session=True)
@@ -357,11 +378,14 @@ class Environment:
         src = home / "src"
         if not src.exists():
             copy_source("agent", src)
-            for sub in ("state", "worker/console", "worker/etc", "worker/hypertree", "downloads", "bundles"):
+            for sub in ("state", "worker/etc", "worker/hypertree", "downloads", "bundles"):
                 (home / sub).mkdir(parents=True, exist_ok=True)
             write_env("agent", src, agent_env(n))
+        install_systemctl()
+        UNITS.mkdir(parents=True, exist_ok=True)
+        (UNITS / f"{worker_unit(n)}.json").write_text(json.dumps({"command": worker_command(n)}))
         report(f"starting agent {n} ({AGENT_IPS[n - 1]})")
-        proc = self._spawn(f"agent{n}", [PYTHON, "-m", "agent"], cwd=src, pythonpath=src)
+        proc = self._spawn(f"agent{n}", [PYTHON, "-m", "agent"], cwd=src, pythonpath=src, path_first=BIN)
         wait_for(f"agent {n}", lambda: port_open(AGENT_PORTS[n - 1]), 30, proc.proc, LOGS / f"agent{n}.log")
 
     def stop_agent(self, n: int, report: Report = _quiet) -> None:

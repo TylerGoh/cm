@@ -41,11 +41,9 @@ class AgentConfig(BaseSettings):
 
     # stores
     memory_store_path: Path
-    process_store_path: Path
 
     # worker process (ProcessManager)
-    worker_command: Annotated[list[str], Field(min_length=1)]
-    worker_console_log_dir: Path
+    worker_systemctl_name: str
     worker_program_log_path: Path
     worker_initialize_flag: str
     start_timeout: float

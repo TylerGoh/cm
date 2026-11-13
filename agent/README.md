@@ -8,8 +8,8 @@ no routes. One per worker box.
 
 - Python 3.12 with `venv`, and your internal pip index (`PIP_INDEX_URL` or `pip.conf`); every dependency is installed by name from it, never from a URL. Besides the usual web stack the agent needs
   `elasticsearch`, `elastic-transport`, `urllib3`, `python-dateutil` and `tzdata` there.
-- The worker's default install: the binary in `WORKER_COMMAND`, `ETC_DIR` and `HYPERTREE_DIR`.
-  The agent never installs the worker.
+- The worker's default install: its systemd unit `WORKER_SYSTEMCTL_NAME` (with `Restart=no` and
+  `KillSignal=SIGKILL`), `ETC_DIR` and `HYPERTREE_DIR`. The agent never installs the worker.
 - The Elastic CA certificate at `ELASTIC_CERT_PATH`. The agent won't start without it.
 - Network access to the cluster manager, the file server, Elastic and the worker's HTTP port.
 
@@ -25,7 +25,7 @@ cp .env.example .env                # fill it in (Foreman writes it on provision
 
 A missing, misspelled or invalid setting fails at startup with the key's name. The agent
 creates every folder it or the worker writes to at startup: the stores' folder,
-`WORKER_CONSOLE_LOG_DIR`, `WORKER_PROGRAM_LOG_PATH`'s folder, `DOWNLOAD_DIR`, `BUNDLE_DIR`, `ETC_DIR`
+`WORKER_PROGRAM_LOG_PATH`'s folder, `DOWNLOAD_DIR`, `BUNDLE_DIR`, `ETC_DIR`
 and `HYPERTREE_DIR`.
 
 ## Run it as a service
@@ -46,10 +46,10 @@ The unit expects this folder at `/opt/agent`.
   use `cm stop <ip>` on the cluster manager.
 - **One agent per box.** Don't run `agent` in the foreground while the service runs: both
   would drive the same worker.
-- **State** is two small files, `MEMORY_STORE_PATH` and `PROCESS_STORE_PATH`. A missing file
-  means first boot. A corrupt one fails startup on purpose.
-- **Worker console logs**: one file per spawn in `WORKER_CONSOLE_LOG_DIR`, named
-  `worker-console-<UTC time>.log`. The path is also in the journal.
+- **State** is one small file, `MEMORY_STORE_PATH`. A missing file means first boot. A corrupt
+  one fails startup on purpose.
+- **Worker console logs**: the worker's stdout and stderr are in its unit's journal,
+  `journalctl -u <WORKER_SYSTEMCTL_NAME>`.
 - **Settings changes** need a restart.
 - **Upgrading**: replace everything in this folder except `.venv` and `.env`, run
   `.venv/bin/pip install -e .` again, then restart.

@@ -10,7 +10,6 @@ dependencies = [
     "elasticsearch>=8.13,<9",   # its httpx node; the major version must match the Elastic cluster
     "pydantic>=2.7",
     "pydantic-settings>=2.4",
-    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]

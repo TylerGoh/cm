@@ -48,6 +48,7 @@ A large item is split into numbered steps, agreed as one plan up front.
 - Before building anything that changes what gets sent or shown (Elastic documents, inventory records), show a sample of the output first.
 - Config classes keep section headers only, with no comment per field.
 - No comments that only restate a general coding practice. Comments explain this code's own reasons.
+- No code for one-off transitions (handing over from an old release's state or processes). The owner does them by hand on the boxes; say exactly what to run instead.
 
 ## Tools and schema changes
 

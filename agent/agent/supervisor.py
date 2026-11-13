@@ -91,7 +91,7 @@ class Supervisor:
     async def _observe(self) -> Observed:
         """Gathers one snapshot. The status rules live in ProcessManager.derive_status."""
         healthy = self._health.healthy                   # the only read this tick, before any await
-        status = self.process.derive_status(healthy) if self.process.attached else None
+        status = await self.process.derive_status(healthy) if self.process.attached else None
         return Observed(
             process_status=status,
             healthy=healthy,

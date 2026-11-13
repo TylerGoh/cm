@@ -2,10 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from agent.models import ProcessMemory
 from agent.operations import plan
-from agent.process import ProcessManager
-from agent.state_store import JsonStore
+from agent.process import ProcessManager, WorkerUnit
 from agent.updates import UpdateManager
 from agent.wire import DesiredState, OpType
 from agent.worker_client import WorkerClient
@@ -19,8 +17,7 @@ DESIRED = DesiredState(
 
 def managers(tmp_path: Path) -> tuple[ProcessManager, UpdateManager]:
     worker = WorkerClient("http://worker", timeout=1, reload_timeout=1)
-    process = ProcessManager(worker, JsonStore(ProcessMemory, tmp_path / "process.json"),
-                             command=["true"], console_log_dir=tmp_path, program_log_path=tmp_path / "w.log",
+    process = ProcessManager(worker, WorkerUnit("worker.service"), program_log_path=tmp_path / "w.log",
                              initialize_flag="ready", start_timeout=1, stop_timeout=1)
     updates = UpdateManager(worker, download_dir=tmp_path, bundle_dir=tmp_path, etc_dir=tmp_path,
                             bundle_symlink_mapping={}, bundle_symlink_default_dir=None,
