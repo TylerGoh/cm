@@ -23,6 +23,7 @@ class DeploymentStatus(StrEnum):
 class IncidentKind(StrEnum):
     NON_RESPONDING = auto()         # opened by the watcher, from silence
     METRICS_UNAVAILABLE = auto()    # opened by the heartbeat service, from metrics_available=False
+    ARTIFACT_MISMATCH = auto()      # opened by the file watch, from a re-fetched artifact's sha256
 
 
 class IncidentSource(StrEnum):

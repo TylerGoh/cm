@@ -268,6 +268,11 @@ The fetch checks for `job.json` and an artifact of its size, not `job.json` alon
 Why: a version deleted by hand on the file server stayed missing, and with only the artifact gone, a new fetch did nothing. Refusing a changed artifact keeps the file server from serving one that agents would reject, and lets a later fetch succeed once upstream serves the right one again.
 Cost: a missing hypertree isn't restored; the next agent to load the version makes and uploads a new one.
 
+**The daemon fetches every version that isn't UNSTABLE again, every minute (2026-11-13).**
+The file watch calls the idempotent fetch with the recorded `upstream_url` and sha256. A changed artifact opens an `ARTIFACT_MISMATCH` incident from the cluster manager; a fetch that succeeds closes it.
+Why: any version that isn't UNSTABLE can be pointed at again (ACTIVE, the canary, a rollback target), and nothing else noticed a version deleted on the file server.
+Cost: one request per such version per minute, and an incident still open when its version becomes UNSTABLE stays open.
+
 ## Packaging
 
 **Three separate projects, `agent`, `cluster-manager` and `file-server` (2026-11-04).**

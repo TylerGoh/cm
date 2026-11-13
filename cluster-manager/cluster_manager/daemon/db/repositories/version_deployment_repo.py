@@ -46,5 +46,12 @@ class VersionDeploymentRepo:
         )
         return list(result.scalars())
 
+    async def not_unstable(self) -> list[VersionDeployment]:
+        """The versions agents may still be pointed at: every one that isn't UNSTABLE."""
+        result = await self._session.execute(
+            select(VersionDeployment).where(VersionDeployment.status != DeploymentStatus.UNSTABLE)
+        )
+        return list(result.scalars())
+
     def add(self, deployment: VersionDeployment) -> None:
         self._session.add(deployment)

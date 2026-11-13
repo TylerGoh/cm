@@ -1,5 +1,5 @@
 """The daemon: wiring only. Startup creates the schema, seeds or checks the ACTIVE
-version, reschedules a pending canary judgement, then starts the watcher and the sender."""
+version, reschedules a pending canary judgement, then starts the watcher, the sender, the fleet watch and the file watch."""
 
 import asyncio
 import logging
@@ -15,7 +15,7 @@ from cluster_manager.daemon.clients.file_server import FileServerClient
 from cluster_manager.daemon.clients.mattermost import MattermostClient
 from cluster_manager.daemon.config import config
 from cluster_manager.daemon.db.session import create_schema, engine, session_factory
-from cluster_manager.daemon.loops import fleet_watch, sender, watcher
+from cluster_manager.daemon.loops import file_watch, fleet_watch, sender, watcher
 from cluster_manager.daemon.services import versions
 
 log = logging.getLogger("cluster_manager")
@@ -51,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         asyncio.create_task(watcher.run(), name="watcher"),
         asyncio.create_task(sender.run(mattermost), name="sender"),
         asyncio.create_task(fleet_watch.run(), name="fleet_watch"),
+        asyncio.create_task(file_watch.run(file_server), name="file_watch"),
     ]
     for task in loops:
         task.add_done_callback(_log_if_failed)
