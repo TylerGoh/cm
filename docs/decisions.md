@@ -243,6 +243,11 @@ Cost: an incident no longer links to its agent row, and `IPV4` is one more key t
 
 **Database:** PostgreSQL (the Bitnami image under podman, 2026-11-05: the RHEL 8 box's SQLite is too old), `READ COMMITTED`, all access through SQLAlchemy, no literal SQL. Enums stored by name. Timestamps are `UtcDateTime` from the daemon's clock. Indexes and constraints are expressions over model attributes. Desired-state changes are one atomic `UPDATE ... RETURNING`; history keyed `(ip, generation)`. Operations recorded once per `(agent_ip, op_id)`. Schema via `create_all`, no migrations while data can be wiped.
 
+**The 2026-11-13 schema change wipes the database: `tools/migrate_2026_11.py` (2026-11-13).**
+It drops every table and enum type and creates the current schema empty, in one transaction, only with `--yes` and only on a database not already on the new schema. Agents register again on their next heartbeat, and the daemon's next start bootstraps `BOOTSTRAP_VERSION` again. It ships in the patch (under `tools/` in the install folder) and is copied to the daemon's box and run there with the daemon's `.venv` Python, the daemon stopped.
+Why: some stored versions came from corrupt upstreams, and the owner wants a clean slate over migrating them. The script is maintained only by Claude, so it may use handwritten SQL.
+Cost: incident history, operations and the record of decommissioned agents are lost; a decommissioned box still running registers again. The file server's copy of the bootstrap version must be deleted by hand first, or the bootstrap gets the stored copy back.
+
 **The CLI is Typer, rendered with Rich (2026-11-04).**
 Each command is a typed function whose docstring is its help, enum options list their choices and are checked before a request is sent, and lists render as tables with only condition, canary outcome and step state coloured. Daemon text is printed with markup off; piped output keeps one row per line; tracebacks hide local variables.
 Why: cleaner command definitions than argparse plus a hand-written table helper, and a readable `--help` without extra work.
