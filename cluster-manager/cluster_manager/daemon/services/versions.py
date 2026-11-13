@@ -57,6 +57,7 @@ async def ensure_bootstrap(
     job = await file_server.fetch(bootstrap_upstream_url, bootstrap_version)
     seed = VersionDeployment(
         version=bootstrap_version,
+        upstream_url=bootstrap_upstream_url,
         artifact_url=file_server.artifact_url(bootstrap_version),
         artifact_sha256=job.sha256,
         status=DeploymentStatus.ACTIVE,
@@ -92,6 +93,7 @@ async def dispatch(session: AsyncSession, file_server: FileServerClient, schedul
         raise ActionRefused("no eligible agent for a canary (live and running)")
     versions.add(VersionDeployment(
         version=request.version,
+        upstream_url=request.upstream_url,
         artifact_url=file_server.artifact_url(request.version),
         artifact_sha256=job.sha256,
         status=DeploymentStatus.VERIFYING,

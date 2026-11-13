@@ -11,6 +11,7 @@ class VersionDeployment(Base):
     __tablename__ = "version_deployments"
 
     version: Mapped[str] = mapped_column(primary_key=True)
+    upstream_url: Mapped[str]              # where the file server fetches it from, again if it goes missing
     artifact_url: Mapped[str]
     artifact_sha256: Mapped[str]
     status: Mapped[DeploymentStatus]
