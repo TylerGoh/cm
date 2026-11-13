@@ -75,12 +75,13 @@ def split(path: str) -> tuple[str, str]:
     return "root", path
 
 
-# Dev-only folders: never in a release (the initial zip skips them through .gitattributes).
+# Dev-only folders and files: never in a release (the initial zip skips them through .gitattributes).
 DEV_ONLY = ("devenv/",)
+DEV_ONLY_FILES = (".gitattributes", "CLAUDE.md")
 
 
 def is_dev_only(path: str) -> bool:
-    return path.startswith(DEV_ONLY) or path == ".gitattributes"
+    return path.startswith(DEV_ONLY) or path in DEV_ONLY_FILES
 
 
 def changed_paths(frm: str, to: str) -> list[str]:

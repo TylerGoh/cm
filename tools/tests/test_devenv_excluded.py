@@ -20,5 +20,6 @@ def test_patches_skip_devenv():
     assert make_patch.is_dev_only("devenv/dev")
     assert make_patch.is_dev_only("devenv/harness/scenarios.py")
     assert make_patch.is_dev_only(".gitattributes")
+    assert make_patch.is_dev_only("CLAUDE.md")
     assert not make_patch.is_dev_only("agent/config.py")
     assert not make_patch.is_dev_only("prepare.py")

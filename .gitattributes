@@ -1,3 +1,4 @@
 # Dev-only tooling stays out of release zips (git archive). tools/make_patch.py skips it in patches.
 /devenv export-ignore
 /.gitattributes export-ignore
+/CLAUDE.md export-ignore
