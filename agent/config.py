@@ -73,7 +73,6 @@ class AgentConfig(BaseSettings):
     max_failures: int
     performance_interval: float
     performance_window_seconds: float
-    max_failed_ratio: float
     max_metrics_failures: int
     inventory_interval: float
     require_running: bool

@@ -260,6 +260,11 @@ Cost: `inventory.py` imports `config`, so it has no unit tests; code that needs 
 
 **Generated blocks are marked `# BEGIN generated: <name>` / `# END generated: <name>`, with no comments inside (2026-11-12).** `prepare.py` and the patch check also read the older `# --- ... ---` form that v4 installs have.
 
+**The judgement is a user block, `judge(oldest, newest)`, shipped commented out (2026-11-13).**
+`performance.py` has `# BEGIN user: judge` / `# END user: judge`, holding only a commented-out `judge(oldest, newest) -> list[str] | None` with `pass`. The owner writes `judge`, its helpers and its limits there on the box. `MAX_FAILED_RATIO` and the monitor's `max_failed_ratio` are gone.
+Why: the judgement is the owner's code, and two readings are all a judgement needs; its limits belong with it. An agent without it should fail loudly, not run with no judgement.
+Cost: until the block is filled in, every full window logs a `NameError` and gives no verdict, devenv included. Patches don't yet carry the box's block into a new `performance.py`.
+
 ## File server
 
 Single-file FastAPI app, one directory per job. The fetch is idempotent, hashes while streaming, rejects anything that isn't a valid zip, and writes `job.json` last. One hypertree URL per job (GET/PUT, 409 once present). No auth, one process.

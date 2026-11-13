@@ -19,57 +19,34 @@ class MetricsReading:
 
 # --- pure functions ---
 
-def failed_requests(reading: MetricsReading) -> float:
-    """Requests that should have gone out but didn't: too old, or lagged."""
-    v = reading.values
-    return v.requests_old_failed_total + v.requests_out_lagged_total
-
-
-def intake_requests(reading: MetricsReading) -> float:
-    """Everything that came in: what went out plus what failed."""
-    return reading.values.requests_out_total + failed_requests(reading)
-
-
 def counter_reset(prev: MetricsReading, curr: MetricsReading) -> bool:
     """Any counter went down, so the worker restarted and the counters started again."""
     return any(getattr(curr.values, name) < getattr(prev.values, name) for name in COUNTER_FIELDS)
 
 
-def judge(oldest: MetricsReading, newest: MetricsReading, max_failed_ratio: float) -> list[str]:
-    """[] = ok, one message = too many failed. The counters are cumulative, so the amount over
-    the window is newest - oldest. No intake in the window means nothing failed: ok."""
-    failed = failed_requests(newest) - failed_requests(oldest)
-    intake = intake_requests(newest) - intake_requests(oldest)
-    if intake == 0:
-        return []
-    ratio = failed / intake
-    if ratio > max_failed_ratio:
-        minutes = (newest.at - oldest.at) / 60
-        return [f"{ratio:.0%} of requests failed over {minutes:.1f} min "
-                f"({failed:.0f} of {intake:.0f}), above {max_failed_ratio:.0%}"]
-    return []
+# BEGIN user: judge
+# def judge(oldest: MetricsReading, newest: MetricsReading) -> list[str] | None:
+#     pass
+# END user: judge
 
 
 # --- the monitor ---
 
 class PerformanceMonitor:
-    """Judges the worker from its failed-request ratio over a sliding window. Active while the
+    """Judges the worker with judge() over a sliding window. Active while the
     worker is RUNNING and no operation runs; otherwise it forgets everything, so every verdict
     describes one uninterrupted run of one version."""
 
     def __init__(self, worker: WorkerClient, feed: ConditionFeed, *, interval: float,
-                 window_seconds: float, max_failed_ratio: float, max_failures: int) -> None:
+                 window_seconds: float, max_failures: int) -> None:
         if not 0 < interval < window_seconds:
             raise ValueError(f"need 0 < interval < window_seconds, got {interval} and {window_seconds}")
-        if not 0 < max_failed_ratio < 1:
-            raise ValueError(f"max_failed_ratio must be between 0 and 1, got {max_failed_ratio}")
         if max_failures < 1:
             raise ValueError(f"max_failures must be at least 1, got {max_failures}")
         self._worker = worker
         self._feed = feed
         self._interval = interval                   # seconds between readings
         self._window_seconds = window_seconds       # judged span, e.g. 300
-        self._max_failed_ratio = max_failed_ratio   # e.g. 0.30
         self._max_failures = max_failures           # failed metrics() calls in a row before False
         self._readings: deque[MetricsReading] = deque()
         self._failures = 0
@@ -133,7 +110,7 @@ class PerformanceMonitor:
         oldest, newest = self._readings[0], self._readings[-1]
         if newest.at - oldest.at < self._window_seconds:
             return None                             # not a full window yet
-        return judge(oldest, newest, self._max_failed_ratio)
+        return judge(oldest, newest)  # noqa: F821  (defined in the user block above)
 
     def _reset(self) -> None:
         self._readings.clear()

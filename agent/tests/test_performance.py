@@ -4,7 +4,7 @@ import pytest
 
 from agent import performance
 from agent.feed import ConditionFeed, Conditions
-from agent.performance import MetricsReading, PerformanceMonitor, judge
+from agent.performance import MetricsReading, PerformanceMonitor
 from agent.wire import ProcessStatus
 from agent.worker_client import WorkerMetrics
 
@@ -34,6 +34,20 @@ def running(feed: ConditionFeed, busy: bool = False) -> None:
                             updating=False, running_version="1.0"))
 
 
+def stand_in_judge(oldest: MetricsReading, newest: MetricsReading) -> list[str]:
+    """The user block is empty in the repo: a judge for the monitor tests, failing above 30%."""
+    def failed(r: MetricsReading) -> float:
+        return r.values.requests_old_failed_total + r.values.requests_out_lagged_total
+    lost = failed(newest) - failed(oldest)
+    intake = newest.values.requests_out_total - oldest.values.requests_out_total + lost
+    return ["too many failed"] if intake and lost / intake > 0.30 else []
+
+
+@pytest.fixture(autouse=True)
+def judge(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(performance, "judge", stand_in_judge, raising=False)
+
+
 @pytest.fixture
 def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     now = [0.0]
@@ -45,7 +59,7 @@ def monitor() -> tuple[PerformanceMonitor, FakeWorker, ConditionFeed]:
     worker, feed = FakeWorker(), ConditionFeed()
     running(feed)
     m = PerformanceMonitor(worker, feed, interval=INTERVAL, window_seconds=WINDOW,  # type: ignore[arg-type]
-                           max_failed_ratio=0.30, max_failures=3)
+                           max_failures=3)
     return m, worker, feed
 
 
@@ -53,26 +67,6 @@ def step(m: PerformanceMonitor, worker: FakeWorker, clock: list[float], r: Metri
     worker.queue.append(r.values if r is not None else None)
     asyncio.run(m._step())
     clock[0] += INTERVAL
-
-
-# --- judge ---
-
-def test_judge_counts_both_failures_against_intake() -> None:
-    # 60 out, 20 old + 20 lagged failed: 40 of 100 = 40%
-    assert judge(reading(0, 0), reading(300, 60, 20, 20), 0.30) != []
-
-
-def test_judge_at_threshold_is_ok() -> None:
-    assert judge(reading(0, 0), reading(300, 70, 15, 15), 0.30) == []        # exactly 30%
-
-
-def test_judge_uses_the_window_not_the_totals() -> None:
-    # Many failures before the window, none during it.
-    assert judge(reading(0, 100, 900, 0), reading(300, 200, 900, 0), 0.30) == []
-
-
-def test_judge_no_traffic_is_ok() -> None:
-    assert judge(reading(0, 5, 1, 1), reading(300, 5, 1, 1), 0.30) == []
 
 
 # --- the monitor ---
@@ -134,7 +128,7 @@ def test_success_clears_unavailable(clock: list[float]) -> None:
 def test_settings_are_checked() -> None:
     with pytest.raises(ValueError):
         PerformanceMonitor(FakeWorker(), ConditionFeed(), interval=300, window_seconds=300,  # type: ignore[arg-type]
-                           max_failed_ratio=0.3, max_failures=3)
+                           max_failures=3)
     with pytest.raises(ValueError):
         PerformanceMonitor(FakeWorker(), ConditionFeed(), interval=30, window_seconds=300,  # type: ignore[arg-type]
-                           max_failed_ratio=1.5, max_failures=3)
+                           max_failures=0)

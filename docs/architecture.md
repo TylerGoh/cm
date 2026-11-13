@@ -369,11 +369,9 @@ How `metrics()` works:
 
 ### performance.py: PerformanceMonitor
 
-Code: `agent/performance.py` (`MetricsReading`, `failed_requests`, `intake_requests`, `counter_reset`, `judge`, `PerformanceMonitor`). `PerformanceMonitor(worker, feed, *, interval, window_seconds, max_failed_ratio, max_failures)`, all from `config`; the constructor raises unless `0 < interval < window_seconds`, `0 < max_failed_ratio < 1` and `max_failures >= 1`.
+Code: `agent/performance.py` (`MetricsReading`, `counter_reset`, the user block with `judge`, `PerformanceMonitor`). `PerformanceMonitor(worker, feed, *, interval, window_seconds, max_failures)`, all from `config`; the constructor raises unless `0 < interval < window_seconds` and `max_failures >= 1`.
 
-The judgement (`judge` and the helpers it reads fields through) is the owner's to code against the real `WorkerMetrics`; `docs/worker-contract.md` has the pattern. The window, the gate and `metrics_available` don't depend on the fields. Today's check, deliberately simple:
-- `failed = old_failed + out_lagged`, and `intake = out + failed`: everything that came in, whether it went out or not.
-- Over the last `window_seconds` (5 minutes), the version is bad when `failed / intake` is above `max_failed_ratio` (30%). Exactly 30% is ok. A window with no intake is ok, since nothing failed.
+The judgement is the owner's: `judge(oldest, newest) -> list[str] | None`, with its helpers and limits, written on the box between `# BEGIN user: judge` and `# END user: judge`. The repo ships the block commented out, so an agent without it fails each full window with `NameError` (logged, no verdict). `docs/worker-contract.md` has the pattern. The window, the gate and `metrics_available` don't depend on the fields.
 - The counters are cumulative, so the amount over the window is the newest reading minus the oldest. Missed readings inside the window don't matter, and there are no bins.
 
 The window:
