@@ -41,9 +41,10 @@ The unit expects this folder at `/opt/agent`.
 
 ## Good to know
 
-- **The worker outlives the agent.** Stopping or restarting the agent leaves the worker
-  running (`KillMode=process`), and the next agent reattaches to it. To keep the worker down,
-  use `cm stop <ip>` on the cluster manager.
+- **The worker outlives the agent.** It is its own systemd unit, so stopping or restarting the
+  agent leaves it running, and the next agent reattaches to it. To keep the worker down, use
+  `cm stop <ip>` on the cluster manager; a `systemctl start` of the worker by hand is adopted
+  by the agent on its next tick.
 - **One agent per box.** Don't run `agent` in the foreground while the service runs: both
   would drive the same worker.
 - **State** is one small file, `MEMORY_STORE_PATH`. A missing file means first boot. A corrupt

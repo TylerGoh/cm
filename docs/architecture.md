@@ -17,7 +17,7 @@ agent/
   decide.py        pure policy
   operations.py    plan(): one explicit recipe per OpType
   pipeline.py      generic engine; Stage.from_callable and Guard.from_callable derive from signatures (imports nothing from the agent)
-  process.py       ProcessManager: owns ProcessStatus; spawns, waits for, stops and reattaches to the worker (no pipeline import)
+  process.py       ProcessManager: owns ProcessStatus; starts, waits for, stops and reattaches to the worker unit; WorkerUnit (no pipeline import)
   updates.py       UpdateManager: bundles and links, hypertrees, reload, verify (no pipeline import)
   worker_client.py the only code that sends requests to the worker; the generated worker contract block
   feed.py          Conditions, ConditionFeed
@@ -73,12 +73,12 @@ wire → models, pipeline, state_store → worker_client, elastic → process, u
 - One operation runs at a time, as a background task. `tick` skips `decide` while one is active, and does nothing else about the running operation: it still observes, sends the heartbeat and publishes.
 - Operations restart from scratch: no resuming, every step is idempotent, and an interrupted operation is discarded. The agent's memory is persisted only to survive deliberate restarts.
 - The agent never rolls back on its own. The cluster manager rolls back by changing the desired state.
-- Installing the worker binary is outside the agent's scope. The binary is installed with a default install, so there is always something to run. The default install keeps its configuration as real folders and files under `etc_dir`. The agent manages only what the worker loads: `download` unpacks a version's zip into its own bundle folder and points a configured table of per-file symlinks under `etc_dir` into it, and `start` spawns the worker, which loads whatever the links and the default install's files hold. The agent only ever creates and replaces links; it never moves or deletes a real file. The only version the agent knows is `running_version`, the one the live worker reports. ("Signature version" is the informal name for the same thing; the code always says `running_version`.)
+- Installing the worker binary is outside the agent's scope. The binary is installed with a default install, so there is always something to run. The default install keeps its configuration as real folders and files under `etc_dir`. The agent manages only what the worker loads: `download` unpacks a version's zip into its own bundle folder and points a configured table of per-file symlinks under `etc_dir` into it, and `start` starts the worker's unit, which loads whatever the links and the default install's files hold. The agent only ever creates and replaces links; it never moves or deletes a real file. The only version the agent knows is `running_version`, the one the live worker reports. ("Signature version" is the informal name for the same thing; the code always says `running_version`.)
 - Artifacts always come from the internal file server: every `artifact_url` in the desired state points there (see "Cluster manager daemon and client"). So does each version's hypertree, a folder the worker generates while loading a version that makes later loads of it faster; UPDATE clears, fetches and uploads it, and FORCE_UPDATE clears and fetches it, as best-effort steps (see operations.py).
 - `restart_generation` and `force_update_generation` are per-agent counters. The agent acts when the desired value is higher than the one it last handled, and both sides start at 0.
-- CRASHED means the worker has failed: either its pid is gone, or it's alive but hung (it failed `max_failures` liveness checks in a row). Both go through the same crash path.
-- The worker outlives an agent restart. The agent's systemd unit has `KillMode=process`, so stopping the agent doesn't kill the worker it spawned. REATTACH relies on this.
-- The agent only reports a crash it was alive to see. A worker whose pid disappeared while the agent was down isn't treated as crashed: `reattach` settles the file to STOPPED, since the agent can't know why the worker went away (it may have been stopped by hand).
+- CRASHED means the worker has failed: either its unit's processes are gone without the agent stopping it, or it's alive but hung (it failed `max_failures` liveness checks in a row). Both go through the same crash path.
+- The worker is its own systemd unit (`WORKER_SYSTEMCTL_NAME`), installed with the box, so it outlives an agent restart and REATTACH finds it. The unit has `Restart=no` (the agent owns the crash policy) and `KillSignal=SIGKILL` (every stop is a kill), and leaves `KillMode` at `control-group`, so systemd reports it gone only once every process in it is.
+- The agent only reports a crash it was alive to see. A unit that failed while the agent was down isn't treated as crashed: `reattach` resets it and counts it STOPPED, since the agent can't know why the worker went away (it may have been stopped by hand).
 - Deployment settings come from `config` (see config.py). `SHUTDOWN_GRACE` stays a constant.
 
 ## config.py
@@ -89,10 +89,10 @@ Code: `config.py` (`AgentConfig`, `config`). Imported as `from config import con
 - There is no host setting: every service binds `0.0.0.0` (`BIND_HOST` in each service's entry point).
 - `WORKER_INITIALIZE_FLAG` is the text that marks the worker's ready line in its program log.
 - No defaults, and `extra="forbid"`: a missing or misspelled setting fails startup. A missing file fails with its path.
-- `worker_command` is a JSON list (binary first, each flag its own item), at least one item. A single-quoted value may span lines.
+- `worker_systemctl_name` is the worker's unit, as `systemctl` takes it (`worker.service`, or `worker`).
 - `bundle_symlink_mapping` is a JSON object: file inside a bundle → file path under `etc_dir` where its symlink goes. Links are per file, never per folder.
 - `bundle_symlink_default_dir` is a folder under `etc_dir`. Every bundle file not in `bundle_symlink_mapping` is linked there by its name alone, flattened. Empty turns it off (`app.py` passes `None`).
-- Settings read by `pydantic-settings` directly are not exported, so the worker never sees them; it inherits the agent's ordinary environment.
+- Settings read by `pydantic-settings` directly are not exported. The worker gets its environment from its unit, not from the agent.
 - The values are the owner's. `config.py` has a comment per section of settings, not per setting.
 
 ## wire.py
@@ -109,7 +109,7 @@ The heartbeat is `HeartbeatReport` out and `DesiredState` back; the response bod
 
 `OperationView.generation` is the desired generation the operation was started from (`active.desired.generation` in `_operation_view`).
 
-Timestamps are `AwareDatetime` (`OperationView.started_at` and `finished_at`): a value without a timezone fails validation on both sides. The type requires a timezone, not UTC; the agent sends UTC (`datetime.now(UTC)`). The same rule holds for every Pydantic model with a timestamp that crosses a boundary or is persisted: `ProcessMemory.create_time` and every timestamp in the client↔daemon schemas (`cluster_manager/schemas.py`).
+Timestamps are `AwareDatetime` (`OperationView.started_at` and `finished_at`): a value without a timezone fails validation on both sides. The type requires a timezone, not UTC; the agent sends UTC (`datetime.now(UTC)`). The same rule holds for every Pydantic model with a timestamp that crosses a boundary or is persisted: every timestamp in the client↔daemon schemas (`cluster_manager/schemas.py`).
 
 `HeartbeatReport` carries the agent's IPv4 address (`ipv4: IPv4Address`, from `config.ipv4`), which is its identity. It is a plain string on the wire. Pydantic rejects a malformed address on both sides and normalises it, so the cluster manager always receives one canonical form, which it stores as a string. The first heartbeat from an unknown IP registers the agent; there is no separate registration message. Hostname and location are not on the wire.
 
@@ -119,13 +119,11 @@ The cluster manager's copy, `cluster_manager/daemon/wire.py` in the `cluster-man
 
 ## models.py
 
-Code: `agent/models.py` (`HostInfo`, `Observed`, `AgentMemory`, `AgentMemoryChanges`, `ProcessMemory`). The running operation's record is `ActiveOperation` in `supervisor.py`.
+Code: `agent/models.py` (`HostInfo`, `Observed`, `AgentMemory`, `AgentMemoryChanges`). The running operation's record is `ActiveOperation` in `supervisor.py`.
 
 `HostInfo(ipv4, hostname, cluster_name)` is this box's identity, a runtime dataclass built once in the lifespan from `config`. All are written upstream by Foreman (`CLUSTER_NAME` is required); nothing in the agent looks them up from the OS (no `gethostname`). A location, or any other per-box value, is an inventory `env:` field in `config.yaml` (see inventory.py). The supervisor gets only `host.ipv4`; `ElasticClient` gets the whole `HostInfo`.
 
 `AgentMemory` is the agent's persisted policy memory: the generation it acknowledged, the counters it handled, the generation it gave up on, and whether it spent its crash restart. It is named apart from `AgentStatus`, the derived label in the report.
-
-`ProcessMemory(pid, create_time, state)` is the persisted process record: the last state the agent wrote and the identity of the process it started. It is named apart from `ProcessStatus`, the status derived from it. `create_time` is an `AwareDatetime`: the process's own creation time from the OS (`psutil`), converted to UTC once when it's read. `_find` converts the live process's time the same way and compares the two, allowing 1s. A naive datetime is rejected when the model is built.
 
 `Observed(process_status, healthy, running_version)` is one snapshot per tick.
 - There is no separate `attached` field: `_observe` reads `ProcessManager.attached` and sets `process_status=None` while not attached.
@@ -140,12 +138,10 @@ Code: `agent/models.py` (`HostInfo`, `Observed`, `AgentMemory`, `AgentMemoryChan
 
 ## state_store.py
 
-Code: `agent/state_store.py`. `JsonStore[T: BaseModel]` holds no value; the file is the only copy. `load()` raises `FileNotFoundError` or `ValidationError`, and `save()` is atomic: temp file, fsync, `os.replace`, then an fsync of the folder so the rename itself survives a power loss. It doesn't create the file's folder; the agent's startup does (`_ensure_folders` in `app.py`, with every other folder the agent or the worker writes to). Two stores, each failing differently:
+Code: `agent/state_store.py`. `JsonStore[T: BaseModel]` holds no value; the file is the only copy. `load()` raises `FileNotFoundError` or `ValidationError`, and `save()` is atomic: temp file, fsync, `os.replace`, then an fsync of the folder so the rename itself survives a power loss. It doesn't create the file's folder; the agent's startup does (`_ensure_folders` in `app.py`, with every other folder the agent or the worker writes to). One store:
 
 - `AgentMemory`: a missing file means first boot, so build it explicitly and save: generation and both handled counters at 0, no failed generation, `crash_restarted=False`. A corrupt file fails startup on purpose. The supervisor loads it in `__init__` and keeps the in-memory copy (`memory`); `_set_memory` is the only writer, and it saves before updating memory.
-- `ProcessMemory`: a missing file is first boot, written as `ProcessMemory(pid=None, create_time=None, state=STOPPED)`. `ProcessManager` reads the file on each use, so a derived status is never based on a stale in-memory copy.
-
-First boot for both is handled by `_ensure_first_boot` in `app.py`, before the supervisor is built. Both paths come from `config`.
+First boot is handled by `_ensure_first_boot` in `app.py`, before the supervisor is built. The path comes from `config`. The worker's process state isn't stored: systemd holds it (see ProcessManager).
 
 The last operation is not persisted (see supervisor.py).
 
@@ -180,13 +176,12 @@ Both managers are written out in the project. Step names come from method names,
 
 ### ProcessManager
 
-`ProcessManager(worker, store, *, command, console_log_dir, program_log_path, initialize_flag, start_timeout, stop_timeout)`. It owns `ProcessStatus` and holds no status in memory: every call reloads the state file through `JsonStore`. It holds the `WorkerClient` only to call `version()` in `wait_for_version`; every command to the worker goes through `UpdateManager`.
+`ProcessManager(worker, unit, *, program_log_path, initialize_flag, start_timeout, stop_timeout)`. It owns `ProcessStatus`. It holds the `WorkerClient` only to call `version()` in `wait_for_version`; every command to the worker goes through `UpdateManager`.
 
-- `attached: bool` is the one piece of `ProcessManager` state held in memory, on purpose. It is false until `reattach` succeeds, and only `reattach` sets it (a convention, not enforced). It describes this agent process rather than the worker, so an agent restart resets it, `_observe` reports `process_status=None`, and the next tick does REATTACH.
-- Process identity: `_find(memory)` returns the live `psutil.Process` the memory records, or `None`. A pid whose creation time differs from the stored `create_time` by more than 1s is a reused pid and counts as gone. A zombie counts as gone, and a zombie of ours is reaped (`os.waitpid(pid, WNOHANG)`; a worker found by reattach isn't our child, and init reaps it). `_kill` signals through `psutil`, which re-checks identity, so a reused pid is never signalled.
-- `transition_to(state, *, pid=None, create_time=None)` is the only writer of the stored `ProcessMemory`, including when `reattach` settles the file:
-  - It loads the file. If the stored state already equals `state`, it does nothing, so a retried step can safely ask again.
-  - It raises on any transition outside this table, which holds stored states only, so CRASHED can never be written:
+`WorkerUnit(name)` is the worker's systemd unit, driven with `systemctl` (the agent runs as root): `state()` (`ActiveState` and `Result` from `systemctl show`), `show(*properties)`, `start()` and `stop()` (both `--no-block`: they queue the job and return, and the agent does all the waiting in its own loops, with its own timeouts), `kill()` (`--signal=SIGKILL`, outside a stop, so the unit ends `failed`) and `reset_failed()`. Each call is an async subprocess, never through a shell, capped at `SYSTEMCTL_TIMEOUT` (30s); a non-zero exit raises `SystemctlError` with systemctl's message.
+
+- **Alive** means the unit's `ActiveState` is `active`, `activating`, `reloading`, `refreshing` or `deactivating`. With `KillMode=control-group` systemd leaves `deactivating` only once every process in the unit has exited, so a worker's children (and any files they hold) are gone before the agent counts it stopped or crashed.
+- **The agent's state** (STOPPED, STARTING, RUNNING, STOPPING) is held in memory. `transition_to(state)` moves it along this table, a no-op when already there; CRASHED can never be set:
 
     | From | Allowed to |
     |---|---|
@@ -195,23 +190,29 @@ Both managers are written out in the project. Step names come from method names,
     | RUNNING | STOPPING |
     | STOPPING | STOPPED |
 
-  - `pid` and `create_time` are accepted only when entering STARTING, where both are required.
-  - Otherwise it saves a new `ProcessMemory`, built explicitly (the model is frozen). Entering STARTING records the new process's `pid` and `create_time`; entering STOPPED clears both; any other target keeps them and only changes `state`.
-- `derive_status(responsive)` derives the current status from the state file, whether the pid is alive, and `responsive`, the health verdict passed in by the supervisor. It writes nothing.
+  `reattach`, and a start systemctl refuses, set it directly.
+- `attached: bool` is false until `reattach` succeeds. An agent restart resets it with the rest of the memory, `_observe` reports `process_status=None`, and the next tick does REATTACH.
+- `derive_status(responsive)` reads the unit once:
+  - STOPPING and not alive: STOPPED.
+  - STARTING or RUNNING and not alive: CRASHED, whatever the exit code (a worker that exits 0 on its own is a crash too).
+  - RUNNING and `responsive is False`: CRASHED (hung).
+  - STOPPED and alive: the worker was started outside the agent. It detaches (`attached=False`) and returns `None`, so the next tick's REATTACH adopts it.
+  - A `systemctl` failure detaches the same way, so REATTACH retries every tick instead of the tick loop dying.
+- `check_unit()` runs once in the lifespan. A unit whose `LoadState` isn't `loaded` fails startup (a wrong `WORKER_SYSTEMCTL_NAME`). `Restart` other than `no` and `KillSignal` other than SIGKILL are logged as errors.
 
 The worker has two logs:
-- The **console log**: the spawned process's stdout and stderr. Each spawn gets its own file in `console_log_dir`, named by the spawn time in UTC (`worker-console-20261104T094512Z.log`), so the newest is the last by name and the path is also in the journal. The agent never reads it and never deletes it; `/tmp` cleaning bounds it.
+- Its stdout and stderr go to its unit's journal (`journalctl -u <unit>`). The agent never reads them.
 - The **program log**: the worker's own, ever-growing log at `program_log_path`. The agent never moves or truncates it. Its ready line comes later than the version endpoint answering, and means the worker's metrics can be trusted.
 
-How the steps use `transition_to`:
-- `start() -> int`: refuses unless the file says STOPPED, so a stray call can't spawn a second worker. Notes the program log's size, spawns the worker (`posix_spawnp` with the configured command, in its own process group, stdin from `/dev/null`, stdout and stderr to a new console log), and goes to STARTING with its pid and `create_time`, read from the OS right after the spawn. It returns the program log's size from just before the spawn, produced as `log_offset`. It doesn't wait. There is no await between the spawn and the write, so an agent crash leaving an unrecorded orphan would need it to die in that sub-millisecond gap, which is accepted.
-- `wait_for_log(log_offset)`: reads the program log forward from `log_offset` with `readline()` (from 0 if the file is now shorter, meaning it was replaced), until a line contains `initialize_flag`, then goes to RUNNING. A half-written line is reread whole on the next poll. If the pid dies first, it raises at once, leaving the file at STARTING (a dead pid there derives CRASHED). On timeout (`start_timeout`) it SIGKILLs the recorded pid, waits for the exit (bounded by `stop_timeout`), and raises, with the same result. `log_offset` lives only in the operation's context and is never stored.
-- `wait_for_version()`: used by REATTACH only, for a live worker found in STARTING. A new agent doesn't know where this run's lines begin in the program log, so it waits until the worker answers the version endpoint, then goes to RUNNING. That is earlier than the ready line, which is accepted when reattaching: the first performance window may include a few readings from before the worker was fully ready. Same early-exit and timeout handling as `wait_for_log`.
-- `stop()`: a no-op on STOPPED. Otherwise goes to STOPPING, sends SIGKILL to the recorded pid if it's alive, then runs `wait_for_stop`. For a dead or hung worker the file still says RUNNING, so this is the normal RUNNING → STOPPING → STOPPED path. There is no SIGTERM and no escalation: every stop is a kill.
-- `wait_for_stop()`: sends nothing. It polls until the recorded pid is gone, then goes to STOPPED, and raises if the pid is still alive after `stop_timeout`. It is run by `stop`.
-- `reattach()`: loads the file and checks whether the stored pid is alive. With a dead pid it settles the file to STOPPED through `transition_to`, whatever the file said: STARTING or RUNNING go through STOPPING to STOPPED, and STOPPING goes to STOPPED. With a live pid, or a file that already says STOPPED, it writes nothing. Then it sets `attached`.
+The steps:
+- `start() -> int`: refuses unless STOPPED, so a stray call can't start a second worker. Notes the program log's size, goes to STARTING, then runs `systemctl start --no-block`. STARTING comes first so a tick in between doesn't see a running unit the agent has as STOPPED. If systemctl refuses (an unknown unit), it goes back to STOPPED and raises. Returns the program log's size from before the start, produced as `log_offset`. It doesn't wait.
+- `wait_for_log(log_offset)`: reads the program log forward from `log_offset` with `readline()` (from 0 if the file is now shorter, meaning it was replaced), until a line contains `initialize_flag`, then goes to RUNNING. A half-written line is reread whole on the next poll. If the unit stops being alive first, it raises at once, leaving STARTING, which derives CRASHED. On timeout (`start_timeout`) it runs `systemctl kill --signal=SIGKILL`, waits for the unit to die (bounded by `stop_timeout`) and raises, with the same result. `log_offset` lives only in the operation's context.
+- `wait_for_version()`: used by REATTACH, for any live worker. A new agent doesn't know whether this run logged its ready line, or where its lines begin, so it waits until the worker answers the version endpoint, then goes to RUNNING. That is earlier than the ready line, which is accepted when reattaching: the first performance window may include a few readings from before the worker was fully ready. Same early-exit and timeout handling as `wait_for_log`.
+- `stop()`: a no-op on STOPPED. Otherwise goes to STOPPING, runs `systemctl stop --no-block` (the unit's `KillSignal=SIGKILL` makes it a kill), then `wait_for_stop`. There is no SIGTERM: every stop is a kill.
+- `wait_for_stop()`: sends nothing. It polls until the unit isn't alive, resets a unit left `failed` (it had crashed before this stop), so STOPPED always leaves the unit `inactive`, then goes to STOPPED. It raises if the unit is still alive after `stop_timeout`, leaving STOPPING.
+- `reattach()`: reads the unit. `deactivating`: STOPPING. Alive: STARTING. `failed`: logs it, resets it and counts it STOPPED. Otherwise STOPPED. Then it sets `attached`.
 
-`ProcessManager.reattach` returns a `ReattachPlan(wait_for_start, wait_for_stop)` (a frozen dataclass in `process.py`) saying which transition, if any, a live worker was found in. Both are false after settling a dead pid. REATTACH runs `wait_for_version` when `wait_for_start` is true, and the full `stop` when `wait_for_stop` is true: a previous agent may have written STOPPING and died before its kill, so REATTACH kills again rather than only waiting. In `stop`, `transition_to(STOPPING)` is then a no-op.
+`reattach` returns a `ReattachPlan(wait_for_start, wait_for_stop)` (a frozen dataclass in `process.py`). REATTACH runs `wait_for_version` when `wait_for_start` is true, and the full `stop` when `wait_for_stop` is true; `transition_to(STOPPING)` is then a no-op.
 
 ### UpdateManager
 
@@ -277,15 +278,15 @@ Stages are built with `Stage.from_callable` from the manager methods (see pipeli
 | RESTART | stop, start (retries=0), wait_for_log (retries=0) | – | {} |
 | STOP | stop | – | {} |
 
-- `start`, `wait_for_log` and `wait_for_version` never retry. Repeating a spawn could start a second worker, and the waits kill the process when they time out, so a retry could only wait out `start_timeout` again on a dead pid. Other steps keep the default (3), except UPDATE's `verify` (1).
+- `start`, `wait_for_log` and `wait_for_version` never retry. Repeating a start could race a worker already starting, and the waits kill the worker when they time out, so a retry could only wait out `start_timeout` again on a dead unit. Other steps keep the default (3), except UPDATE's `verify` (1).
 - `artifact` is `artifact_url`, `artifact_sha256` and `version` from `desired`. `hypertree_get_url` and `hypertree_upload_url` also come from `desired`. Within a recipe, `start` produces `log_offset` for `wait_for_log`, and `reattach` produces `reattach_plan` for the REATTACH guards; nothing else is passed between steps. `download`, UPDATE's `verify` and the hypertree steps read `version`.
 - The hypertree steps only make loading faster, so they are non-critical: a failure stays in its `StepView`, never sets `failure` or `failed_generation`, and the update goes on. `clear_hypertree` and `fetch_hypertree` run before `reload` so the worker loads with only the fetched hypertree (or none) in place; `upload_hypertree` runs last, after `verify` has confirmed the worker loaded the version. A failed clear makes the upload refuse (more than one folder). FORCE_UPDATE clears and fetches the hypertree too, so the CRASH_RESTART that loads the new bundle next starts from the stored hypertree. Nothing uploads a hypertree after a CRASH_RESTART: it would only speed up later loads, which isn't worth risking a recovery for.
 - Conditional steps use `when=Guard`. Guards are module-level functions in `operations.py`, turned into `Guard`s with `Guard.from_callable`. `plan()` never branches on runtime state: it is built from `desired` alone, and anything only known at run time (such as what `reattach` found) goes through a produced context key read by a guard.
 - `Plan.context` is a `Mapping[str, object]`, not a `dict`, so the context dicts type-check.
 - FORCE_UPDATE only runs when the worker is CRASHED or STOPPED. From CRASHED, the worker stays CRASHED (or, if it was hung, stays alive until health fails again), the crash budget is wiped, and a later tick does a CRASH_RESTART, which loads the newly linked bundle with the fetched hypertree, if the file server had one. From STOPPED, `decide` checks a pending force bump before `failed_generation`, so it also frees a worker stopped after a failed start; a later tick does a START if `desired_running`. The cluster manager accepts a force bump for either status (2026-11-05).
-- CRASH_RESTART has the same steps as RESTART. It differs only in when `decide` picks it (CRASHED rather than a restart bump) and in using the crash budget. Its `stop` matters because CRASHED includes a live, hung worker; `stop` is a no-op when the pid is already gone. There is no `crash_evidence` step for now, so nothing captures a hung worker's state before the kill. If it comes back, it goes first and non-critical, so it can read the live process and its failure can't block the restart.
-- START, CRASH_RESTART and RESTART spawn the worker, which loads whatever is linked plus the default install's files, not necessarily the desired version, and runs whatever version that is.
-- Only UPDATE verifies the version. START, CRASH_RESTART and RESTART end with `wait_for_log`, their only check: they succeed once the worker logs that it is ready. A timeout kills the process and fails the operation, and the dead pid in STARTING then derives CRASHED. `decide` handles CRASHED before it checks `failed_generation`, so a failed START or RESTART is followed by one CRASH_RESTART if budget is left, and a failed CRASH_RESTART ends in CRASHED_HOLD. A running version that differs from `desired.version` becomes an UPDATE on a later tick through `decide`. A worker that starts but stops answering its version endpoint is caught afterwards by the health monitor as hung, and goes through the crash path.
+- CRASH_RESTART has the same steps as RESTART. It differs only in when `decide` picks it (CRASHED rather than a restart bump) and in using the crash budget. Its `stop` matters because CRASHED includes a live, hung worker; `stop` on a unit that already died only resets it. There is no `crash_evidence` step for now, so nothing captures a hung worker's state before the kill. If it comes back, it goes first and non-critical, so it can read the live process and its failure can't block the restart.
+- START, CRASH_RESTART and RESTART start the worker, which loads whatever is linked plus the default install's files, not necessarily the desired version, and runs whatever version that is.
+- Only UPDATE verifies the version. START, CRASH_RESTART and RESTART end with `wait_for_log`, their only check: they succeed once the worker logs that it is ready. A timeout kills the process and fails the operation, and the failed unit in STARTING then derives CRASHED. `decide` handles CRASHED before it checks `failed_generation`, so a failed START or RESTART is followed by one CRASH_RESTART if budget is left, and a failed CRASH_RESTART ends in CRASHED_HOLD. A running version that differs from `desired.version` becomes an UPDATE on a later tick through `decide`. A worker that starts but stops answering its version endpoint is caught afterwards by the health monitor as hung, and goes through the crash path.
 - Checks run in this order: `Stage.from_callable` and `Guard.from_callable` check each signature, `PipelineStep` checks `retries`, `Pipeline.__init__` checks the stages and guards fit together, and `run` checks the initial context. Produced values are type-checked when each stage runs.
 - No recipe sets an "updating" flag; it's derived from the operation type. Any flag a recipe does set must be reset in `finally_steps`.
 - Behaviour knobs go in the context, and deployment settings in the manager constructors. A knob only becomes its own OpType when `decide` has to choose it.
@@ -493,10 +494,10 @@ file-server/         distribution "file-server": the `file-server` command
 - Each service is one console script, run in the foreground from its virtualenv, and its systemd unit runs the same command: `agent` (`agent.__main__:main`), `cm daemon` (`cm` is `cluster_manager.client.cli:app`), and `file-server` (`file_server.file_server:main`). Each runs uvicorn with the app object, so each is one process.
 - Every service reads its settings only from `.env` in its own project folder, with the same rules: the process environment is ignored, no defaults, unknown keys rejected. `.env.example` lists every key with example values and is committed; `.env` is ignored by git.
 - Each project is installed by hand, following its README: a virtualenv in the project folder, `pip install -e .`, `.env` from `.env.example`, the command in the foreground, then the unit from `deploy/`. The owner sets up the virtualenvs and units on every machine himself, so the units in `deploy/` are a starting point, not a contract. The install is editable on purpose: each config finds its `.env` from its own source file's location, so the source must stay in the project folder rather than be copied into site-packages. There are no install scripts.
-- Dependencies. `agent`: fastapi, uvicorn, httpx, pydantic, pydantic-settings, psutil; `config.py` is a top-level module. `cluster-manager`: fastapi, uvicorn, httpx, pydantic, pydantic-settings, `sqlalchemy[asyncio]` (async mode needs greenlet), asyncpg, apscheduler 3.x, typer and rich. `file-server`: fastapi, uvicorn, httpx, pydantic, pydantic-settings. pytest is a `dev` extra in the agent and the cluster manager. The cluster manager's `tests/` holds the canary's and the fleet's judgement tests, which need no `.env`.
+- Dependencies. `agent`: fastapi, uvicorn, httpx, pydantic, pydantic-settings; `config.py` is a top-level module. `cluster-manager`: fastapi, uvicorn, httpx, pydantic, pydantic-settings, `sqlalchemy[asyncio]` (async mode needs greenlet), asyncpg, apscheduler 3.x, typer and rich. `file-server`: fastapi, uvicorn, httpx, pydantic, pydantic-settings. pytest is a `dev` extra in the agent and the cluster manager. The cluster manager's `tests/` holds the canary's and the fleet's judgement tests, which need no `.env`.
 - Each `.gitignore` covers Python caches, build output and virtualenvs, plus `.env`.
 - The units expect each project at `/opt/<folder>`: `/opt/agent`, `/opt/cluster-manager` and `/opt/file-server` (`WorkingDirectory` and `ExecStart`).
-- `deploy/agent.service`: `KillMode=process` (the worker outlives the agent), `TimeoutStopSec=40` (open connections 5s, the tick in progress up to the 5s heartbeat, and the ~20s operation grace), `PrivateTmp=no` (console logs are in `/tmp`), `Restart=always`.
+- `deploy/agent.service`: `TimeoutStopSec=40` (open connections 5s, the tick in progress up to the 5s heartbeat, and the ~20s operation grace), `Restart=always`. The worker's unit isn't in the repository: it is installed with the box (see ProcessManager).
 - `deploy/cluster-manager.service` and `deploy/file-server.service`: one process each.
 - First install order: the file server, then the cluster manager (its first boot fetches the bootstrap version through the file server), then the agents.
 - Releases are git tags `v0`, `v1`, ... `tools/make_patch.py --initial` zips the newest tag as `toolkit_cm-initial.zip` (with a `VERSION` file, everything under `toolkit_cm/`); `tools/make_patch.py` tags HEAD as the next version and builds `patch_cm-vN.zip` (top folder `patch_cm-vN/`) from the version before. The owner's proprietary details live in one `config.yaml` that never enters the repository; every zip carries `prepare.py`, which applies it.

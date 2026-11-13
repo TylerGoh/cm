@@ -5,7 +5,7 @@ Key decisions behind the current design. Each entry states what is decided, why,
 ## Principles
 
 **Reads go anywhere, writes have one path.**
-Every state change goes through `decide` and an operation. `_set_memory` is the only writer of `AgentMemory`; `transition_to` is the only writer of `ProcessMemory`.
+Every state change goes through `decide` and an operation. `_set_memory` is the only writer of `AgentMemory`; `transition_to` is the only mover of `ProcessManager`'s state.
 Why: every change is traceable to one decision and one operation.
 
 **Derive labels, store facts.**
@@ -68,35 +68,38 @@ Cost: it covers the whole operation, not one phase.
 ## Process management
 
 **`ProcessManager` owns every `ProcessStatus` rule.**
-`derive_status(responsive)`: dead pid while STARTING/RUNNING → CRASHED; RUNNING but unresponsive → CRASHED (hung). CRASHED is never stored.
-Why: one place decides the status; a hang is the same derivation as a dead pid.
+`derive_status(responsive)`: a unit not alive while STARTING/RUNNING → CRASHED; RUNNING but unresponsive → CRASHED (hung). CRASHED is never stored.
+Why: one place decides the status; a hang is the same derivation as a dead worker.
 Cost: a long stall under load could read as a hang, so `max_failures × interval` must be generous.
 
-**`transition_to` is the only writer of the process file.**
-Allowed: STOPPED → STARTING, STARTING → RUNNING/STOPPING, RUNNING → STOPPING, STOPPING → STOPPED. Same-state is a no-op. Entering STARTING records `pid` and `create_time`; entering STOPPED clears them.
+**`transition_to` moves the agent's in-memory process state.**
+Allowed: STOPPED → STARTING, STARTING → RUNNING/STOPPING, RUNNING → STOPPING, STOPPING → STOPPED. Same-state is a no-op.
 
-**`reattach` settles a dead pid to STOPPED.** The agent only reports a crash it was alive to see.
+**`reattach` resets a failed unit and counts it STOPPED.** The agent only reports a crash it was alive to see.
 Cost: no crash evidence for a worker that died while the agent was down.
 
 **Every stop is a SIGKILL.** No SIGTERM rung, no `force_kill`.
 Why: the worker is slow to die and a hung one ignores SIGTERM anyway.
 Cost: the worker never shuts down gracefully.
 
-**Spawning:** `posix_spawnp` in its own process group; identity is pid + `create_time` (psutil, 1s tolerance); zombies are reaped; `start` refuses unless STOPPED.
+**The worker is a systemd unit the agent drives with `systemctl` (2026-11-13).**
+`WORKER_SYSTEMCTL_NAME` names the unit, installed with the box with `Restart=no`, `KillSignal=SIGKILL` and the default `KillMode=control-group`. Alive is the unit's `ActiveState`; the agent's STOPPED/STARTING/RUNNING/STOPPING is held in memory and rebuilt by `reattach`, so there is no `process.json`. `start` and `stop` are `--no-block`; the agent waits in its own loops. `start` refuses unless STOPPED. A crash is any death the agent didn't ask for, exit 0 included. A unit running while the agent has it STOPPED is adopted by a REATTACH. The old spawned workers were stopped by hand on patch day.
+Why: the worker was already installed as a unit. systemd tracks every process in the unit's cgroup, so no pid reuse, no zombies, and a worker's children are gone before it counts as stopped; its stdout and stderr go to the journal. `systemctl` needs no new dependency, and is what the owner runs by hand.
+Cost: each status check runs a `systemctl` process (a few ms, once per tick and every 0.5s in a wait). A process SIGKILL can't take (D state) for two `TimeoutStopSec` is reported `failed` while still there. The worker's environment comes from its unit, not the agent.
 
 **Starting ends with `wait_for_log`; a timeout kills the process and ends on the crash path.**
-`start` returns the program log's size from before the spawn, and `wait_for_log` reads forward from there. `start` and `wait_for_log` have `retries=0`. No finally steps.
+`start` returns the program log's size from before the start, and `wait_for_log` reads forward from there. `start` and `wait_for_log` have `retries=0`. No finally steps.
 Why: a start that never gets ready is a failed worker, which the crash path already handles.
 
-**REATTACH waits with `wait_for_version`, not the log.**
-Why: a new agent doesn't know where the current run's log lines begin.
+**REATTACH waits with `wait_for_version`, not the log, for any live worker.**
+Why: a new agent doesn't know whether the current run logged its ready line, or where its lines begin.
 
 **Health is the version endpoint.** `HealthMonitor` is active while RUNNING or CRASHED and no operation runs. The worker only stops answering during agent-driven operations.
 Cost: a hang verdict is lost after an operation or agent restart.
 
-**The worker survives an agent restart** (`KillMode=process`).
+**The worker survives an agent restart:** it is its own unit, outside the agent's cgroup.
 
-**Two worker logs:** a per-spawn console log in `/tmp` named by UTC start time, and the worker's own program log, which `wait_for_log` reads.
+**Two worker logs:** its stdout and stderr in the unit's journal, and the worker's own program log, which `wait_for_log` reads.
 
 ## Recipes
 
@@ -266,7 +269,7 @@ Why: the judgement is the owner's code, and two readings are all a judgement nee
 Cost: until the block is filled in, every full window logs a `NameError` and gives no verdict, devenv included. Patches don't yet carry the box's block into a new `performance.py`.
 
 **The agent creates its folders at startup (2026-11-13).**
-`_ensure_folders` in `app.py` makes, before anything else: the stores' folder, the console log folder, the program log's folder, `DOWNLOAD_DIR`, `BUNDLE_DIR`, `ETC_DIR` and `HYPERTREE_DIR`. The `mkdir` calls at first use stay, for a folder deleted while the agent runs.
+`_ensure_folders` in `app.py` makes, before anything else: the store's folder, the program log's folder, `DOWNLOAD_DIR`, `BUNDLE_DIR`, `ETC_DIR` and `HYPERTREE_DIR`. The `mkdir` calls at first use stay, for a folder deleted while the agent runs.
 Why: a missing folder failed only at its first write, sometimes long after startup, and installing needed a hand-made `/var/lib/agent`.
 Cost: a mistyped path in `.env` is created instead of rejected.
 
