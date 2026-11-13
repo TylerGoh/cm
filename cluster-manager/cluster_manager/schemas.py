@@ -2,7 +2,7 @@
 the agent and the daemon. One request/response pair per endpoint. Responses are views built for
 display, not database rows, so the tables can change without breaking the client. One standard,
 no versioning: the client and the daemon are deployed together. Every timestamp is AwareDatetime.
-The status enums the client shows (DeploymentStatus, IncidentKind) are defined here; the
+The status enums the client shows (DeploymentStatus, IncidentKind, IncidentSource) are defined here; the
 daemon's database models import them, so both sides use one definition."""
 
 from enum import StrEnum, auto
@@ -23,6 +23,12 @@ class DeploymentStatus(StrEnum):
 class IncidentKind(StrEnum):
     NON_RESPONDING = auto()         # opened by the watcher, from silence
     METRICS_UNAVAILABLE = auto()    # opened by the heartbeat service, from metrics_available=False
+
+
+class IncidentSource(StrEnum):
+    """Who raised the incident."""
+    AGENT = auto()
+    CLUSTER_MANAGER = auto()
 
 
 class AgentCondition(StrEnum):
@@ -84,7 +90,9 @@ class DesiredChange(_View):
 
 class IncidentRow(_View):
     id: int
-    agent_ip: str
+    source: IncidentSource
+    ip: str
+    version: str | None
     kind: IncidentKind
     opened_at: AwareDatetime
     closed_at: AwareDatetime | None

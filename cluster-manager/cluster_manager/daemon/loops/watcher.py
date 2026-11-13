@@ -10,7 +10,7 @@ from cluster_manager.daemon.config import config
 from cluster_manager.daemon.db.repositories.incident_repo import IncidentRepo
 from cluster_manager.daemon.db.repositories.observed_state_repo import ObservedStateRepo
 from cluster_manager.daemon.db.session import session_factory
-from cluster_manager.schemas import IncidentKind
+from cluster_manager.schemas import IncidentKind, IncidentSource
 
 log = logging.getLogger("cluster_manager.watcher")
 
@@ -32,7 +32,7 @@ async def _step() -> None:
         silent = await ObservedStateRepo(session).silent_ips(now, config.non_responding_after)
         incidents = IncidentRepo(session)
         for ip in silent:
-            opened = await incidents.open(ip, IncidentKind.NON_RESPONDING, now)
+            opened = await incidents.open(ip, IncidentKind.NON_RESPONDING, now, source=IncidentSource.AGENT)
             if opened is not None:
                 log.warning("%s is non-responding", ip)
         await session.commit()

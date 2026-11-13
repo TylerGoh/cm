@@ -11,6 +11,7 @@ from cluster_manager.daemon.clients.mattermost import MattermostClient
 from cluster_manager.daemon.db.models.incident import Incident
 from cluster_manager.daemon.db.repositories.incident_repo import IncidentRepo
 from cluster_manager.daemon.db.session import session_factory
+from cluster_manager.schemas import IncidentSource
 
 log = logging.getLogger("cluster_manager.sender")
 
@@ -59,9 +60,17 @@ async def _mark(incident_id: int, *, recovery: bool) -> None:
 
 
 def _opening_text(incident: Incident) -> str:
-    return f":red_circle: {incident.agent_ip}: {incident.kind} since {incident.opened_at:%Y-%m-%d %H:%M:%S} UTC"
+    return f":red_circle: {_subject(incident)} since {incident.opened_at:%Y-%m-%d %H:%M:%S} UTC"
 
 
 def _recovery_text(incident: Incident) -> str:
     assert incident.closed_at is not None
-    return f":large_green_circle: {incident.agent_ip}: {incident.kind} recovered at {incident.closed_at:%Y-%m-%d %H:%M:%S} UTC"
+    return f":large_green_circle: {_subject(incident)} recovered at {incident.closed_at:%Y-%m-%d %H:%M:%S} UTC"
+
+
+def _subject(incident: Incident) -> str:
+    """`10.0.3.17: NON_RESPONDING`, or `cluster manager 10.0.1.5: v4.2.1 ARTIFACT_MISMATCH`."""
+    if incident.source == IncidentSource.AGENT:
+        return f"{incident.ip}: {incident.kind}"
+    about = f"{incident.version} " if incident.version is not None else ""
+    return f"cluster manager {incident.ip}: {about}{incident.kind}"

@@ -58,7 +58,7 @@ LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
 # The daemon's dev settings: two agents, so canary size 1 and every limit 0, short waits.
 DAEMON_ENV = {
-    "PORT": DAEMON_PORT, "LOG_LEVEL": "INFO", "LOG_FORMAT": LOG_FORMAT,
+    "IPV4": "127.0.0.1", "PORT": DAEMON_PORT, "LOG_LEVEL": "INFO", "LOG_FORMAT": LOG_FORMAT,
     "DATABASE_URL": f"postgresql+asyncpg://cm@127.0.0.1:{POSTGRES_PORT}/cluster_manager",
     "FILE_SERVER_URL": f"http://127.0.0.1:{FILE_SERVER_PORT}",
     "FILE_SERVER_TIMEOUT": 10, "FILE_SERVER_FETCH_TIMEOUT": 60,

@@ -225,9 +225,9 @@ def render_operations(ops: Sequence[OperationView]) -> RenderableType:
 
 
 def render_incidents_table(incidents: Sequence[IncidentRow]) -> Table:
-    table = new_table("id", "agent", "kind", "opened", "closed", "sent")
+    table = new_table("id", "source", "ip", "version", "kind", "opened", "closed", "sent")
     for i in incidents:
-        table.add_row(str(i.id), i.agent_ip, i.kind, ago(i.opened_at), ago(i.closed_at),
+        table.add_row(str(i.id), i.source, i.ip, i.version or "-", i.kind, ago(i.opened_at), ago(i.closed_at),
                       ("opening" if i.notified else "-") + (" + recovery" if i.recovery_notified else ""))
     return table
 

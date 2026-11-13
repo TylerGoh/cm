@@ -236,6 +236,11 @@ Cost: a version that fails only slowly, or on fewer agents than the limits, stay
 
 **Non-responding after 3 missed ticks.** Incidents (`non_responding`, `metrics_unavailable`), at most one open per agent and kind. A sender posts openings and recoveries to Mattermost after commit, marking each sent only on success.
 
+**An incident records its source and an IP, with no foreign keys (2026-11-13).**
+`source` is `AGENT` or `CLUSTER_MANAGER`; `ip` is the agent's, or the daemon's own `IPV4` from its `.env`; `version` names the version a cluster manager incident is about. At most one open per source, IP, version and kind.
+Why: the daemon raises incidents of its own (a re-fetched artifact whose hash doesn't match), and an incident is information that shouldn't depend on other tables. The daemon's IP is set by hand because detecting it is unreliable, and under Kubernetes it would be a changing pod IP.
+Cost: an incident no longer links to its agent row, and `IPV4` is one more key to fill in `config.yaml`.
+
 **Database:** PostgreSQL (the Bitnami image under podman, 2026-11-05: the RHEL 8 box's SQLite is too old), `READ COMMITTED`, all access through SQLAlchemy, no literal SQL. Enums stored by name. Timestamps are `UtcDateTime` from the daemon's clock. Indexes and constraints are expressions over model attributes. Desired-state changes are one atomic `UPDATE ... RETURNING`; history keyed `(ip, generation)`. Operations recorded once per `(agent_ip, op_id)`. Schema via `create_all`, no migrations while data can be wiped.
 
 **The CLI is Typer, rendered with Rich (2026-11-04).**

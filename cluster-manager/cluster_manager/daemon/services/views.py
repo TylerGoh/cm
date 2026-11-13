@@ -72,7 +72,9 @@ def desired_change(history: DesiredStateHistoryRow) -> DesiredChange:
 def incident_row(incident: Incident) -> IncidentRow:
     return IncidentRow(
         id=incident.id,
-        agent_ip=incident.agent_ip,
+        source=incident.source,
+        ip=incident.ip,
+        version=incident.version,
         kind=incident.kind,
         opened_at=incident.opened_at,
         closed_at=incident.closed_at,

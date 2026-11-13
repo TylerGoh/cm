@@ -104,6 +104,7 @@ env: {}
 #     HEARTBEAT_INTERVAL: 10       # new in the release after v1: add it, or prepare.py stops
 #     ... every other key of agent/.env.example
 #   cluster-manager:
+#     IPV4: ""
 #     PORT: 8000
 #     DATABASE_URL: postgresql+asyncpg://cluster_manager:secret@127.0.0.1:5432/cluster_manager
 #     MATTERMOST_WEBHOOK_URL: ""

@@ -27,6 +27,7 @@ class DaemonConfig(BaseSettings):
         return (init_settings, dotenv_settings)          # init_settings lets tests pass values directly
 
     # server; it always binds 0.0.0.0
+    ipv4: str
     port: int
     log_level: str
     log_format: str

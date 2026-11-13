@@ -20,7 +20,7 @@ from cluster_manager.daemon.db.repositories.operation_repo import OperationRepo
 from cluster_manager.daemon.db.repositories.version_deployment_repo import VersionDeploymentRepo
 from cluster_manager.daemon.services.desired_state import history_row
 from cluster_manager.daemon.wire import DesiredState, HeartbeatReport
-from cluster_manager.schemas import IncidentKind
+from cluster_manager.schemas import IncidentKind, IncidentSource
 
 
 class AgentDecommissioned(Exception):
@@ -41,11 +41,12 @@ async def handle(session: AsyncSession, report: HeartbeatReport, file_server: Fi
         await OperationRepo(session).record(_operation(ip, report))
 
     incidents = IncidentRepo(session)
-    await incidents.close_open(ip, IncidentKind.NON_RESPONDING, now)
+    agent = IncidentSource.AGENT
+    await incidents.close_open(ip, IncidentKind.NON_RESPONDING, now, source=agent)
     if report.metrics_available is False:
-        await incidents.open(ip, IncidentKind.METRICS_UNAVAILABLE, now)
+        await incidents.open(ip, IncidentKind.METRICS_UNAVAILABLE, now, source=agent)
     elif report.metrics_available is True:
-        await incidents.close_open(ip, IncidentKind.METRICS_UNAVAILABLE, now)
+        await incidents.close_open(ip, IncidentKind.METRICS_UNAVAILABLE, now, source=agent)
     # None neither opens nor closes it: nobody saw the metrics recover.
 
     found = await DesiredStateRepo(session).get_with_deployment(ip)
