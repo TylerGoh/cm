@@ -177,7 +177,10 @@ def test_inventory_env_fields_become_settings_and_env_lines(tmp_path):
     assert result.returncode == 0, result.stderr
     assert "    rack: int" in (root / "agent/config.py").read_text()
     inventory = (root / "agent/agent/inventory.py").read_text()
-    assert 'SettingField("tree", "route_map_dir")' in inventory and 'FeedField("state", "process_status")' in inventory
+    fields = inventory.split("# BEGIN generated: inventory fields")[1].split("# END generated")[0]
+    assert fields == ('\nINVENTORY_FIELDS: dict[str, object] = {\n    "rack": config.rack,\n'
+                      '    "tree": config.route_map_dir,\n}\n')               # state (a source: field) skipped
+    assert "inventory field state (source: process_status) is no longer needed" in result.stderr
     env = (root / "agent/.env").read_text()
     assert "\nRACK=7\n" in env and "\nROUTE_MAP_DIR=/srv/tree\n" in env and "\nWORKER_APP_LOG_PATH=x\n" in env
     assert "\nWORKER_COMMAND='[\"/w\", \"-a\"]'\n" in env
