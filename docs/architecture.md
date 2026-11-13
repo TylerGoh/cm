@@ -140,7 +140,7 @@ Code: `agent/models.py` (`HostInfo`, `Observed`, `AgentMemory`, `AgentMemoryChan
 
 ## state_store.py
 
-Code: `agent/state_store.py`. `JsonStore[T: BaseModel]` holds no value; the file is the only copy. `load()` raises `FileNotFoundError` or `ValidationError`, and `save()` is atomic: temp file, fsync, `os.replace`, then an fsync of the folder so the rename itself survives a power loss. It doesn't create the file's folder; that is part of installing the agent. Two stores, each failing differently:
+Code: `agent/state_store.py`. `JsonStore[T: BaseModel]` holds no value; the file is the only copy. `load()` raises `FileNotFoundError` or `ValidationError`, and `save()` is atomic: temp file, fsync, `os.replace`, then an fsync of the folder so the rename itself survives a power loss. It doesn't create the file's folder; the agent's startup does (`_ensure_folders` in `app.py`, with every other folder the agent or the worker writes to). Two stores, each failing differently:
 
 - `AgentMemory`: a missing file means first boot, so build it explicitly and save: generation and both handled counters at 0, no failed generation, `crash_restarted=False`. A corrupt file fails startup on purpose. The supervisor loads it in `__init__` and keeps the in-memory copy (`memory`); `_set_memory` is the only writer, and it saves before updating memory.
 - `ProcessMemory`: a missing file is first boot, written as `ProcessMemory(pid=None, create_time=None, state=STOPPED)`. `ProcessManager` reads the file on each use, so a derived status is never based on a stale in-memory copy.

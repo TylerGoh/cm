@@ -20,12 +20,13 @@ cd /opt/agent                       # this folder, copied to the box
 python3.12 -m venv .venv
 .venv/bin/pip install -e .          # editable: config.py reads the .env next to it
 cp .env.example .env                # fill it in (Foreman writes it on provisioned boxes)
-mkdir -p /var/lib/agent             # the folder of MEMORY_STORE_PATH and PROCESS_STORE_PATH
 .venv/bin/agent                     # runs in the foreground; Ctrl-C stops it
 ```
 
 A missing, misspelled or invalid setting fails at startup with the key's name. The agent
-creates `DOWNLOAD_DIR`, `BUNDLE_DIR` and `WORKER_CONSOLE_LOG_DIR` itself.
+creates every folder it or the worker writes to at startup: the stores' folder,
+`WORKER_CONSOLE_LOG_DIR`, `WORKER_PROGRAM_LOG_PATH`'s folder, `DOWNLOAD_DIR`, `BUNDLE_DIR`, `ETC_DIR`
+and `HYPERTREE_DIR`.
 
 ## Run it as a service
 

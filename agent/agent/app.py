@@ -54,6 +54,23 @@ def _log_if_failed(task: asyncio.Task[None]) -> None:
         log.error("%s stopped", task.get_name(), exc_info=exc)
 
 
+def _ensure_folders() -> None:
+    """Every folder the agent or the worker writes to, made at startup, so a missing one is
+    created and one that can't be fails here instead of at its first use."""
+    folders = [
+        config.memory_store_path.parent,
+        config.process_store_path.parent,
+        config.worker_console_log_dir,
+        config.worker_program_log_path.parent,
+        config.download_dir,
+        config.bundle_dir,
+        config.etc_dir,
+        config.hypertree_dir,
+    ]
+    for folder in folders:
+        folder.mkdir(parents=True, exist_ok=True)
+
+
 def _ensure_first_boot(memory_store: JsonStore[AgentMemory],
                        process_store: JsonStore[ProcessMemory]) -> None:
     """Missing file = first boot, built explicitly. A corrupt file raises and fails startup."""
@@ -74,6 +91,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- startup ---
     memory_store = JsonStore(AgentMemory, config.memory_store_path)
     process_store = JsonStore(ProcessMemory, config.process_store_path)
+    _ensure_folders()
     _ensure_first_boot(memory_store, process_store)
 
     host = HostInfo(ipv4=config.ipv4, hostname=config.hostname, cluster_name=config.cluster_name)

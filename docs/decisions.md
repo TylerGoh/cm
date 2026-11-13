@@ -265,6 +265,11 @@ Cost: `inventory.py` imports `config`, so it has no unit tests; code that needs 
 Why: the judgement is the owner's code, and two readings are all a judgement needs; its limits belong with it. An agent without it should fail loudly, not run with no judgement.
 Cost: until the block is filled in, every full window logs a `NameError` and gives no verdict, devenv included. Patches don't yet carry the box's block into a new `performance.py`.
 
+**The agent creates its folders at startup (2026-11-13).**
+`_ensure_folders` in `app.py` makes, before anything else: the stores' folder, the console log folder, the program log's folder, `DOWNLOAD_DIR`, `BUNDLE_DIR`, `ETC_DIR` and `HYPERTREE_DIR`. The `mkdir` calls at first use stay, for a folder deleted while the agent runs.
+Why: a missing folder failed only at its first write, sometimes long after startup, and installing needed a hand-made `/var/lib/agent`.
+Cost: a mistyped path in `.env` is created instead of rejected.
+
 ## File server
 
 Single-file FastAPI app, one directory per job. The fetch is idempotent, hashes while streaming, rejects anything that isn't a valid zip, and writes `job.json` last. One hypertree URL per job (GET/PUT, 409 once present). No auth, one process.
